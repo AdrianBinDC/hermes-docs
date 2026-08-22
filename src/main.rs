@@ -56,7 +56,7 @@ fn main() {
         Err(e) => {
             let exit_code = match &e {
                 SearchError::DocsNotFound(_) => 1,
-                _ => 2,
+                SearchError::Internal(_) => 2,
             };
             eprintln!("error: {e}");
             process::exit(exit_code);
