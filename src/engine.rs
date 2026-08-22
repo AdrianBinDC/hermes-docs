@@ -50,7 +50,7 @@ use std::path::{Path, PathBuf};
 use tantivy::collector::TopDocs;
 use tantivy::directory::MmapDirectory;
 use tantivy::query::QueryParser;
-use tantivy::schema::{OwnedValue, Schema, TextOptions};
+use tantivy::schema::{Schema, TextOptions};
 use tantivy::{doc, Index, IndexWriter};
 use walkdir::WalkDir;
 
@@ -814,10 +814,7 @@ pub fn reindex(docs_root: &Path, cache_dir: &Path) -> Result<(), SearchError> {
 
 fn doc_str_field(doc: &tantivy::TantivyDocument, field: tantivy::schema::Field) -> String {
     doc.get_first(field)
-        .and_then(|v| match v {
-            OwnedValue::Str(s) => Some(s.as_str()),
-            _ => None,
-        })
+        .and_then(|v| tantivy::schema::Value::as_str(&v))
         .unwrap_or("")
         .to_string()
 }
@@ -945,7 +942,7 @@ pub fn query(cache_dir: &Path, query_str: &str, top_k: usize) -> Result<QueryOut
     let candidate_limit =
         (per_cat * DIVERSITY_TOP_PATHS * DIVERSITY_CHUNKS_PER_PATH * 32).clamp(512, 2500);
     let top_hits: Vec<(f32, tantivy::DocAddress)> = searcher
-        .search(&q, &TopDocs::with_limit(candidate_limit))
+        .search(&q, &TopDocs::with_limit(candidate_limit).order_by_score())
         .map_err(|e| SearchError::Internal(format!("search failed: {e}")))?;
 
     let mut scored = extract_hits(&searcher, &top_hits, f_path, f_heading, f_body)?;
