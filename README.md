@@ -56,6 +56,8 @@ Flags:
 - `--docs-path <PATH>` — explicit docs root override
 - `--cache-dir <PATH>` — state/index location (default `$XDG_CACHE_HOME/hermes-docs-search` or `~/.cache/hermes-docs-search`)
 
+The skill wrapper (`skills/hermes-docs/scripts/hermes-docs`) injects `-k 3` when called with `--json` unless `-k`/`--top-k` is already provided, and maps the common `-8` typo to `-k 3`.
+
 ## Dev / testing
 
 ```bash
