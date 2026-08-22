@@ -1,0 +1,29 @@
+[package]
+name = "hermes-docs-search"
+version = "0.1.0"
+edition = "2021"
+description = "BM25 full-text search CLI for the local Hermes Agent documentation tree."
+license = "MIT"
+default-run = "hermes-docs-search"
+publish = false
+
+[[bin]]
+name = "hermes-docs-search"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tantivy = "0.22"
+thiserror = "1"
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = true
+strip = true

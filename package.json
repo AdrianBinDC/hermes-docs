@@ -1,0 +1,20 @@
+{
+  "name": "hermes-docs",
+  "version": "0.1.0",
+  "description": "BM25 full-text search over the local Hermes Agent documentation, wrapped as a Hermes skill.",
+  "bin": {
+    "hermes-docs-search": "dist/hermes-docs-search"
+  },
+  "scripts": {
+    "build": "cargo build --release && mkdir -p dist && cp target/release/hermes-docs-search dist/",
+    "test": "cargo test"
+  },
+  "keywords": [
+    "hermes",
+    "search",
+    "docs",
+    "bm25",
+    "skill"
+  ],
+  "license": "MIT"
+}
