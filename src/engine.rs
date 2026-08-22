@@ -99,16 +99,17 @@ fn expand_search_tokens(cleaned: &str, mut tokens: Vec<String>) -> Vec<String> {
     let words: Vec<&str> = lower.split_whitespace().collect();
 
     for (verb, ing) in [("set", "setting"), ("configure", "configuring")] {
-        if words.iter().any(|w| *w == verb) && !tokens.iter().any(|t| t == ing) {
+        if words.contains(&verb) && !tokens.iter().any(|t| t == ing) {
             tokens.push(ing.to_string());
         }
     }
 
     // Docs often say "main model" where users say "default model".
-    if tokens.iter().any(|t| t == "default") && tokens.iter().any(|t| t == "model") {
-        if !tokens.iter().any(|t| t == "main") {
-            tokens.push("main".to_string());
-        }
+    if tokens.iter().any(|t| t == "default")
+        && tokens.iter().any(|t| t == "model")
+        && !tokens.iter().any(|t| t == "main")
+    {
+        tokens.push("main".to_string());
     }
 
     tokens
@@ -293,7 +294,7 @@ fn bucket_into_categories(
 
     for (cat, cat_hits) in by_cat_hits {
         let cap = category_hit_cap(&cat, per_cat);
-        let max_per_path_in_cat = ((cap + 1) / 2).max(2);
+        let max_per_path_in_cat = cap.div_ceil(2).max(2);
         let mut by_path: std::collections::HashMap<String, Vec<SearchHit>> =
             std::collections::HashMap::new();
         for hit in cat_hits {
@@ -722,7 +723,7 @@ pub fn ensure_indexed(docs_root: &Path, cache_dir: &Path) -> Result<(), SearchEr
         Some(s) => {
             let current_fingerprint = docs_fingerprint(docs_root);
             let (current_sha, current_version) = hermes_identity(docs_root);
-            let docs_match = s.docs_path == docs_root.to_string_lossy().to_string();
+            let docs_match = s.docs_path == docs_root.to_string_lossy();
             let sha_match = s.hermes_git_sha == current_sha;
             let version_match = s.hermes_version == current_version;
             let fingerprint_match = s.fingerprint == current_fingerprint;

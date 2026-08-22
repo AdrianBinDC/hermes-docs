@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # hermes-docs — wrapper for hermes-docs-search
-# PATH → cache → GitHub release (best-effort) → cargo build from this repo
+# PATH → cache → optional release download (HERMES_DOCS_RELEASE) → cargo build from this repo
 
 set -eu
 
@@ -114,24 +114,10 @@ case "$os-$arch" in
         ;;
 esac
 
-github_release_base() {
+release_download_base() {
+    # Opt-in only: do not infer a GitHub repo from git remotes on first run.
     if [ -n "${HERMES_DOCS_RELEASE:-}" ]; then
         echo "$HERMES_DOCS_RELEASE"
-        return
-    fi
-    origin=""
-    if [ -d "$REPO_DIR/.git" ]; then
-        origin=$(git -C "$REPO_DIR" remote get-url origin 2>/dev/null || true)
-    fi
-    case "$origin" in
-        git@github.com:*.git) origin="https://github.com/${origin#git@github.com:}" ; origin="${origin%.git}" ;;
-        git@github.com:*) origin="https://github.com/${origin#git@github.com:}" ;;
-        https://github.com/*.git) origin="${origin%.git}" ;;
-        https://github.com/*) ;;
-        *) origin="" ;;
-    esac
-    if [ -n "$origin" ]; then
-        echo "$origin/releases/download/v0.1.0"
     fi
 }
 
@@ -152,11 +138,11 @@ install_from_tar() {
 }
 
 if [ -n "$target" ] && command -v curl >/dev/null 2>&1; then
-    base=$(github_release_base || true)
-    asset="hermes-docs-search-${target}.tar.gz"
+    base=$(release_download_base || true)
     if [ -n "$base" ]; then
+        asset="hermes-docs-search-${target}.tar.gz"
         url="$base/$asset"
-        echo "Downloading $BIN_NAME for $target..." >&2
+        echo "Downloading $BIN_NAME for $target from $base..." >&2
         dl=$(mktemp)
         if curl -fsSL "$url" -o "$dl"; then
             install_from_tar "$dl" "$@" || echo "warning: archive had no $BIN_NAME" >&2
@@ -181,4 +167,5 @@ if command -v cargo >/dev/null 2>&1 && [ -f "$REPO_DIR/Cargo.toml" ]; then
 fi
 
 echo "error: $BIN_NAME not on PATH, not in cache, and cannot build from $REPO_DIR" >&2
+echo "hint: install to $CACHE_BIN, set HERMES_DOCS_RELEASE to a GitHub release asset base URL, or run from a checkout with cargo" >&2
 exit 2
