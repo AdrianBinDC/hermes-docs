@@ -235,7 +235,10 @@ fn hermes_identity(docs_root: &Path) -> (String, String) {
         .output()
         .ok()
         .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .and_then(|o| {
+            let out = String::from_utf8_lossy(&o.stdout);
+            out.lines().next().map(|l| l.trim().to_string())
+        })
         .unwrap_or_default();
 
     (sha, version)
@@ -346,11 +349,12 @@ pub fn ensure_indexed(docs_root: &Path, cache_dir: &Path) -> Result<(), SearchEr
         None => true,
         Some(s) => {
             let current_fingerprint = docs_fingerprint(docs_root);
-            let current_sha = hermes_identity(docs_root).0;
+            let (current_sha, current_version) = hermes_identity(docs_root);
             let docs_match = s.docs_path == docs_root.to_string_lossy().to_string();
-            let sha_match = current_sha.is_empty() || s.hermes_git_sha == current_sha;
+            let sha_match = s.hermes_git_sha == current_sha;
+            let version_match = s.hermes_version == current_version;
             let fingerprint_match = s.fingerprint == current_fingerprint;
-            !(docs_match && sha_match && fingerprint_match)
+            !(docs_match && sha_match && version_match && fingerprint_match)
         }
     };
 
