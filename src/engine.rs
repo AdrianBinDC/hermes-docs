@@ -67,20 +67,64 @@ const OVERSIZED_CHUNK_BYTES: usize = 4096;
 fn is_search_noise_token(t: &str) -> bool {
     matches!(
         t,
-        "how" | "do" | "i" | "a" | "an" | "the" | "to" | "for" | "of" | "and" | "or" | "in"
-            | "on" | "is" | "are" | "with" | "my" | "me" | "what" | "does" | "can" | "please"
-            | "help" | "many" | "much" | "have" | "has" | "her" | "his" | "their" | "our" | "your"
-            | "into" | "from" | "set" | "up" | "setup"
+        "how"
+            | "do"
+            | "i"
+            | "a"
+            | "an"
+            | "the"
+            | "to"
+            | "for"
+            | "of"
+            | "and"
+            | "or"
+            | "in"
+            | "on"
+            | "is"
+            | "are"
+            | "with"
+            | "my"
+            | "me"
+            | "what"
+            | "does"
+            | "can"
+            | "please"
+            | "help"
+            | "many"
+            | "much"
+            | "have"
+            | "has"
+            | "her"
+            | "his"
+            | "their"
+            | "our"
+            | "your"
+            | "into"
+            | "from"
+            | "set"
+            | "up"
+            | "setup"
     )
 }
 
-/// Strip from on_topic / content-token signals — includes generic config verbs.
+/// Strip from `on_topic` / content-token signals — includes generic config verbs.
 fn is_signal_noise_token(t: &str) -> bool {
     is_search_noise_token(t)
         || matches!(
             t,
-            "set" | "up" | "setup" | "configure" | "configuration" | "default" | "main" | "use"
-                | "get" | "make" | "new" | "all" | "any"
+            "set"
+                | "up"
+                | "setup"
+                | "configure"
+                | "configuration"
+                | "default"
+                | "main"
+                | "use"
+                | "get"
+                | "make"
+                | "new"
+                | "all"
+                | "any"
         )
 }
 
@@ -94,7 +138,7 @@ fn is_brand_token(t: &str) -> bool {
 fn tokens_filtered(cleaned: &str, noise: fn(&str) -> bool) -> Vec<String> {
     cleaned
         .split_whitespace()
-        .map(|t| t.to_lowercase())
+        .map(str::to_lowercase)
         .filter(|t| t.len() >= 3 && !noise(t))
         .collect()
 }
@@ -214,9 +258,9 @@ const DIVERSITY_GLOBAL_TOP: usize = 15;
 const DIVERSITY_SEAT_PATHS: usize = 2;
 
 /// Merge global top hits with up to K chunks from each of the top P paths per category.
-fn diversify_hits(scored: Vec<SearchHit>) -> Vec<SearchHit> {
+fn diversify_hits(scored: &[SearchHit]) -> Vec<SearchHit> {
     if scored.is_empty() {
-        return scored;
+        return Vec::new();
     }
 
     let mut out: Vec<SearchHit> = Vec::new();
@@ -235,7 +279,7 @@ fn diversify_hits(scored: Vec<SearchHit>) -> Vec<SearchHit> {
 
     let mut by_category: std::collections::HashMap<String, Vec<SearchHit>> =
         std::collections::HashMap::new();
-    for hit in &scored {
+    for hit in scored {
         by_category
             .entry(hit.category.clone())
             .or_default()
@@ -256,10 +300,7 @@ fn diversify_hits(scored: Vec<SearchHit>) -> Vec<SearchHit> {
                 (path.clone(), peak)
             })
             .collect();
-        path_peaks.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        path_peaks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         for (path, _) in path_peaks.into_iter().take(DIVERSITY_TOP_PATHS) {
             let mut chunks = by_path.remove(&path).unwrap_or_default();
@@ -287,12 +328,12 @@ fn diversify_hits(scored: Vec<SearchHit>) -> Vec<SearchHit> {
 
 /// Fill category buckets: one hit from each top path, then score-order fill to cap.
 fn bucket_into_categories(
-    diversified: Vec<SearchHit>,
+    diversified: &[SearchHit],
     per_cat: usize,
 ) -> std::collections::BTreeMap<String, Vec<SearchHit>> {
     let mut by_cat_hits: std::collections::HashMap<String, Vec<SearchHit>> =
         std::collections::HashMap::new();
-    for hit in &diversified {
+    for hit in diversified {
         by_cat_hits
             .entry(hit.category.clone())
             .or_default()
@@ -312,7 +353,7 @@ fn bucket_into_categories(
         }
 
         let mut paths: Vec<(String, Vec<SearchHit>)> = by_path.into_iter().collect();
-        for (_, chunks) in paths.iter_mut() {
+        for (_, chunks) in &mut paths {
             chunks.sort_by(|a, b| {
                 b.score
                     .partial_cmp(&a.score)
@@ -320,8 +361,8 @@ fn bucket_into_categories(
             });
         }
         paths.sort_by(|a, b| {
-            let pa = a.1.first().map(|h| h.score).unwrap_or(0.0);
-            let pb = b.1.first().map(|h| h.score).unwrap_or(0.0);
+            let pa = a.1.first().map_or(0.0, |h| h.score);
+            let pb = b.1.first().map_or(0.0, |h| h.score);
             pb.partial_cmp(&pa).unwrap_or(std::cmp::Ordering::Equal)
         });
 
@@ -331,7 +372,11 @@ fn bucket_into_categories(
         let mut path_counts: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
 
-        let try_push = |hit: SearchHit, out: &mut Vec<SearchHit>, seen: &mut std::collections::HashSet<(String, String)>, path_counts: &mut std::collections::HashMap<String, usize>| -> bool {
+        let try_push = |hit: SearchHit,
+                        out: &mut Vec<SearchHit>,
+                        seen: &mut std::collections::HashSet<(String, String)>,
+                        path_counts: &mut std::collections::HashMap<String, usize>|
+         -> bool {
             let key = (hit.path.clone(), hit.heading.clone());
             if !seen.insert(key) {
                 return false;
@@ -426,7 +471,8 @@ pub fn resolve_docs_root(explicit: Option<&Path>) -> Result<PathBuf, SearchError
     }
 
     Err(SearchError::DocsNotFound(
-        "no docs root found (checked --docs-path, $HERMES_DOCS_PATH, $HERMES_HOME, ~/.hermes)".into(),
+        "no docs root found (checked --docs-path, $HERMES_DOCS_PATH, $HERMES_HOME, ~/.hermes)"
+            .into(),
     ))
 }
 
@@ -460,13 +506,12 @@ fn docs_fingerprint(docs_root: &Path) -> u64 {
     let mut hasher = DefaultHasher::new();
     let mut files: Vec<PathBuf> = WalkDir::new(docs_root)
         .into_iter()
-        .filter_map(|e| e.ok())
+        .filter_map(Result::ok)
         .filter(|e| {
             e.file_type().is_file()
                 && e.path()
                     .extension()
-                    .map(|ext| ext == "md" || ext == "mdx")
-                    .unwrap_or(false)
+                    .is_some_and(|ext| ext == "md" || ext == "mdx")
         })
         .map(|e| e.path().to_path_buf())
         .collect();
@@ -479,7 +524,7 @@ fn docs_fingerprint(docs_root: &Path) -> u64 {
                 .modified()
                 .ok()
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_nanos());
+                .map(|d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX));
             mtime.hash(&mut hasher);
             meta.len().hash(&mut hasher);
         }
@@ -519,8 +564,8 @@ fn chunk_markdown(content: &str, rel_path: &str) -> Vec<(String, String)> {
             }
             let title = trimmed.trim_start_matches('#').trim().to_string();
             if trimmed.starts_with("## ") {
-                parent_h2 = title.clone();
-                heading = title;
+                heading.clone_from(&title);
+                parent_h2 = title;
             } else if parent_h2.is_empty() {
                 heading = title;
             } else {
@@ -552,17 +597,16 @@ fn chunk_markdown(content: &str, rel_path: &str) -> Vec<(String, String)> {
     }
 
     if chunks.is_empty() {
-        let heading = content
-            .lines()
-            .find(|l| l.starts_with("# "))
-            .map(|l| l[2..].trim().to_string())
-            .unwrap_or_else(|| {
+        let heading = content.lines().find(|l| l.starts_with("# ")).map_or_else(
+            || {
                 Path::new(rel_path)
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or(rel_path)
                     .to_string()
-            });
+            },
+            |l| l[2..].trim().to_string(),
+        );
         chunks.push((heading, content.trim().to_string()));
     }
 
@@ -582,7 +626,7 @@ fn hermes_agent_root(docs_root: &Path) -> Option<&Path> {
     docs_root.parent()?.parent()
 }
 
-/// Escape Tantivy QueryParser specials so a raw user question is safe.
+/// Escape `QueryParser` specials so a raw user question is safe.
 fn escape_user_query(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for c in raw.chars() {
@@ -609,7 +653,7 @@ fn hermes_identity(docs_root: &Path) -> (String, String) {
                 .output()
                 .ok()
                 .filter(|o| o.status.success())
-                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
         })
         .unwrap_or_default();
 
@@ -620,7 +664,7 @@ fn hermes_identity(docs_root: &Path) -> (String, String) {
         .filter(|o| o.status.success())
         .and_then(|o| {
             let out = String::from_utf8_lossy(&o.stdout);
-            out.lines().next().map(|l| l.trim().to_string())
+            out.lines().next().map(|l| l.trim().to_owned())
         })
         .unwrap_or_default();
 
@@ -654,8 +698,8 @@ fn save_state(cache_dir: &Path, docs_root: &Path) -> Result<(), SearchError> {
         indexed_at: chrono::Utc::now().to_rfc3339(),
         fingerprint,
     };
-    let json = serde_json::to_string_pretty(&state)
-        .map_err(|e| SearchError::Internal(e.to_string()))?;
+    let json =
+        serde_json::to_string_pretty(&state).map_err(|e| SearchError::Internal(e.to_string()))?;
     std::fs::write(state_path(cache_dir), json)
         .map_err(|e| SearchError::Internal(format!("failed to write state: {e}")))?;
     Ok(())
@@ -686,19 +730,20 @@ fn index_docs(docs_root: &Path, cache_dir: &Path) -> Result<(), SearchError> {
 
     let mut doc_count = 0u64;
 
-    for entry in WalkDir::new(docs_root).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(docs_root)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+    {
         let path = entry.path();
         let is_md = path
             .extension()
             .and_then(|e| e.to_str())
-            .map(|ext| ext == "md" || ext == "mdx")
-            .unwrap_or(false);
+            .is_some_and(|ext| ext == "md" || ext == "mdx");
         if !path.is_file() || !is_md {
             continue;
         }
-        let content = match std::fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(_) => continue,
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
         };
         let rel = path
             .strip_prefix(docs_root)
@@ -755,15 +800,64 @@ pub fn reindex(docs_root: &Path, cache_dir: &Path) -> Result<(), SearchError> {
     Ok(())
 }
 
+fn extract_hits(
+    searcher: &tantivy::Searcher,
+    top_hits: &[(f32, tantivy::DocAddress)],
+    f_path: tantivy::schema::Field,
+    f_heading: tantivy::schema::Field,
+    f_body: tantivy::schema::Field,
+) -> Result<Vec<SearchHit>, SearchError> {
+    let mut hits = Vec::new();
+    for (score, doc_addr) in top_hits {
+        let doc: tantivy::TantivyDocument = searcher
+            .doc(*doc_addr)
+            .map_err(|e| SearchError::Internal(e.to_string()))?;
+        let path = doc
+            .get_first(f_path)
+            .and_then(|v| match v {
+                OwnedValue::Str(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .unwrap_or("")
+            .to_string();
+        let heading = doc
+            .get_first(f_heading)
+            .and_then(|v| match v {
+                OwnedValue::Str(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .unwrap_or("")
+            .to_string();
+        let body = doc
+            .get_first(f_body)
+            .and_then(|v| match v {
+                OwnedValue::Str(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .unwrap_or("")
+            .to_string();
+        let category = category_for_path(&path);
+
+        hits.push(SearchHit {
+            rank: 0,
+            category,
+            url: url_for_relpath(&path),
+            path,
+            heading,
+            score: *score,
+            body_bytes: body.len(),
+            oversized: body.len() > OVERSIZED_CHUNK_BYTES,
+            body,
+        });
+    }
+    Ok(hits)
+}
+
 /// Run a BM25 query and return hits grouped by top-level docs category.
 ///
 /// Scores are raw BM25. Callers (or an LLM) interpret `signals` + categories;
 /// this function does not pick a "primary" document.
-pub fn query(
-    cache_dir: &Path,
-    query_str: &str,
-    top_k: usize,
-) -> Result<QueryOutput, SearchError> {
+pub fn query(cache_dir: &Path, query_str: &str, top_k: usize) -> Result<QueryOutput, SearchError> {
     let mmap_dir = MmapDirectory::open(index_path(cache_dir))
         .map_err(|e| SearchError::Internal(format!("failed to open index dir: {e}")))?;
     let index = Index::open(mmap_dir)
@@ -801,56 +895,13 @@ pub fn query(
     let q = parsed.map_err(|e| SearchError::Internal(format!("parse query failed: {e}")))?;
 
     let per_cat = top_k.max(1);
-    let candidate_limit = (per_cat * DIVERSITY_TOP_PATHS * DIVERSITY_CHUNKS_PER_PATH * 32)
-        .clamp(512, 2500);
+    let candidate_limit =
+        (per_cat * DIVERSITY_TOP_PATHS * DIVERSITY_CHUNKS_PER_PATH * 32).clamp(512, 2500);
     let top_hits: Vec<(f32, tantivy::DocAddress)> = searcher
         .search(&q, &TopDocs::with_limit(candidate_limit))
         .map_err(|e| SearchError::Internal(format!("search failed: {e}")))?;
 
-    let mut scored: Vec<SearchHit> = Vec::new();
-    for (score, doc_addr) in top_hits {
-        let doc: tantivy::TantivyDocument = searcher
-            .doc(doc_addr)
-            .map_err(|e| SearchError::Internal(e.to_string()))?;
-        let path = doc
-            .get_first(f_path)
-            .and_then(|v| match v {
-                OwnedValue::Str(s) => Some(s.as_str()),
-                _ => None,
-            })
-            .unwrap_or("")
-            .to_string();
-        let heading = doc
-            .get_first(f_heading)
-            .and_then(|v| match v {
-                OwnedValue::Str(s) => Some(s.as_str()),
-                _ => None,
-            })
-            .unwrap_or("")
-            .to_string();
-        let body = doc
-            .get_first(f_body)
-            .and_then(|v| match v {
-                OwnedValue::Str(s) => Some(s.as_str()),
-                _ => None,
-            })
-            .unwrap_or("")
-            .to_string();
-        let category = category_for_path(&path);
-
-        scored.push(SearchHit {
-            rank: 0,
-            category,
-            url: url_for_relpath(&path),
-            path,
-            heading,
-            score,
-            body_bytes: body.len(),
-            oversized: body.len() > OVERSIZED_CHUNK_BYTES,
-            body,
-        });
-    }
-
+    let mut scored = extract_hits(&searcher, &top_hits, f_path, f_heading, f_body)?;
     scored.sort_by(|a, b| {
         b.score
             .partial_cmp(&a.score)
@@ -861,7 +912,9 @@ pub fn query(
     let token_coverage = if content.is_empty() {
         1.0
     } else {
-        matched.len() as f32 / content.len() as f32
+        let m = matched.len().min(u32::MAX as usize) as f32;
+        let c = content.len().min(u32::MAX as usize) as f32;
+        m / c
     };
     let on_topic = if content.is_empty() {
         !scored.is_empty()
@@ -869,7 +922,7 @@ pub fn query(
         matched.len() == content.len()
     };
 
-    let max_bm25 = scored.first().map(|h| h.score).unwrap_or(0.0);
+    let max_bm25 = scored.first().map_or(0.0, |h| h.score);
 
     if scored.is_empty() && searcher.num_docs() == 0 {
         return Ok(QueryOutput {
@@ -903,8 +956,8 @@ pub fn query(
         });
     }
 
-    let diversified = diversify_hits(scored);
-    let by_cat = bucket_into_categories(diversified, per_cat);
+    let diversified = diversify_hits(&scored);
+    let by_cat = bucket_into_categories(&diversified, per_cat);
     let mut categories: Vec<CategoryHits> = by_cat
         .into_iter()
         .map(|(category, hits)| CategoryHits { category, hits })
@@ -913,8 +966,8 @@ pub fn query(
         category_bucket_priority(&a.category)
             .cmp(&category_bucket_priority(&b.category))
             .then_with(|| {
-                let sa = a.hits.first().map(|h| h.score).unwrap_or(0.0);
-                let sb = b.hits.first().map(|h| h.score).unwrap_or(0.0);
+                let sa = a.hits.first().map_or(0.0, |h| h.score);
+                let sb = b.hits.first().map_or(0.0, |h| h.score);
                 sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
             })
     });
@@ -941,20 +994,21 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    fn setup_fixtures(dir: &Path) {
-        let src = Path::new("tests/fixtures/docs");
-        fn copy_tree(src_dir: &Path, dst_dir: &Path) {
-            for entry in fs::read_dir(src_dir).unwrap() {
-                let entry = entry.unwrap();
-                let target = dst_dir.join(entry.file_name());
-                if entry.file_type().unwrap().is_dir() {
-                    fs::create_dir_all(&target).unwrap();
-                    copy_tree(entry.path().as_ref(), &target);
-                } else {
-                    fs::copy(entry.path(), &target).unwrap();
-                }
+    fn copy_tree(src_dir: &Path, dst_dir: &Path) {
+        for entry in fs::read_dir(src_dir).unwrap() {
+            let entry = entry.unwrap();
+            let target = dst_dir.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                fs::create_dir_all(&target).unwrap();
+                copy_tree(entry.path().as_ref(), &target);
+            } else {
+                fs::copy(entry.path(), &target).unwrap();
             }
         }
+    }
+
+    fn setup_fixtures(dir: &Path) {
+        let src = Path::new("tests/fixtures/docs");
         fs::create_dir_all(dir).unwrap();
         copy_tree(src, dir);
     }
@@ -976,7 +1030,7 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             SearchError::DocsNotFound(msg) => assert!(msg.contains("no docs root found")),
-            other => panic!("expected DocsNotFound, got: {other:?}"),
+            SearchError::Internal(msg) => panic!("expected DocsNotFound, got: {msg:?}"),
         }
     }
 
@@ -1056,7 +1110,11 @@ More text."#;
         reindex(&docs, &cache).unwrap();
 
         let out = query(&cache, "configuration", 5).unwrap();
-        assert!(out.signals.docs_empty, "expected docs_empty=true; signals={:?}", out.signals);
+        assert!(
+            out.signals.docs_empty,
+            "expected docs_empty=true; signals={:?}",
+            out.signals
+        );
         assert!(!out.signals.on_topic);
         assert_eq!(out.signals.hit_count, 0);
         assert!(out.categories.is_empty());
@@ -1072,7 +1130,11 @@ More text."#;
 
         // Even an off-topic query on a populated tree must not set docs_empty.
         let out = query(&cache, "zzzzzqqqqqqxxx", 5).unwrap();
-        assert!(!out.signals.docs_empty, "populated tree must not set docs_empty; signals={:?}", out.signals);
+        assert!(
+            !out.signals.docs_empty,
+            "populated tree must not set docs_empty; signals={:?}",
+            out.signals
+        );
         assert!(!out.signals.on_topic);
     }
 
@@ -1334,9 +1396,7 @@ SDK.components.Button is the default export for dashboard plugins.
         );
         let paths: Vec<&str> = flat_hits(&out).iter().map(|h| h.path.as_str()).collect();
         assert!(
-            paths
-                .iter()
-                .any(|p| p.contains("configuring-models")),
+            paths.iter().any(|p| p.contains("configuring-models")),
             "expected configuring-models.md in hits; got {paths:?}"
         );
     }
@@ -1399,7 +1459,10 @@ SDK.components.Button is the default export for dashboard plugins.
 
     #[test]
     fn test_escape_user_query() {
-        assert_eq!(escape_user_query("config.yaml: providers"), r"config.yaml\: providers");
+        assert_eq!(
+            escape_user_query("config.yaml: providers"),
+            r"config.yaml\: providers"
+        );
         assert_eq!(escape_user_query("foo (bar)"), r"foo \(bar\)");
     }
 
@@ -1411,7 +1474,7 @@ SDK.components.Button is the default export for dashboard plugins.
         let big_body = "x".repeat(5000);
         fs::write(
             docs.join("reference/long.md"),
-            format!("# Long\n\n## Huge section\n\n{}", big_body),
+            format!("# Long\n\n## Huge section\n\n{big_body}"),
         )
         .unwrap();
         fs::create_dir_all(docs.join("config")).unwrap();
@@ -1426,13 +1489,19 @@ SDK.components.Button is the default export for dashboard plugins.
 
         let out = query(&cache, "huge section", 5).unwrap();
         let hits = flat_hits(&out);
-        assert!(hits.iter().any(|h| h.path.contains("long.md")), "expected long.md in hits");
+        assert!(
+            hits.iter().any(|h| h.path.contains("long.md")),
+            "expected long.md in hits"
+        );
         let big = hits
             .iter()
             .find(|h| h.path.contains("long.md"))
             .expect("long.md hit missing");
         assert_eq!(big.body_bytes, 5000);
-        assert!(big.oversized, "expected oversized flag for >4096 byte chunk");
+        assert!(
+            big.oversized,
+            "expected oversized flag for >4096 byte chunk"
+        );
 
         let out = query(&cache, "short section", 5).unwrap();
         let hits_small = flat_hits(&out);
@@ -1440,7 +1509,10 @@ SDK.components.Button is the default export for dashboard plugins.
             .iter()
             .find(|h| h.path.contains("small.md"))
             .expect("small.md hit missing");
-        assert!(!small.oversized, "small chunk must not be flagged oversized");
+        assert!(
+            !small.oversized,
+            "small chunk must not be flagged oversized"
+        );
         assert_eq!(small.body_bytes, small.body.len());
     }
 
