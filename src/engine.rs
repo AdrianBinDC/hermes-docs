@@ -212,12 +212,30 @@ fn url_for_relpath(rel: &str) -> String {
     format!("{BASE_URL}/{no_ext}")
 }
 
+/// `<hermes-agent>/website/docs` → `<hermes-agent>`.
+fn hermes_agent_root(docs_root: &Path) -> Option<&Path> {
+    docs_root.parent()?.parent()
+}
+
+/// Escape Tantivy QueryParser specials so a raw user question is safe.
+fn escape_user_query(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for c in raw.chars() {
+        match c {
+            '+' | '-' | '&' | '|' | '!' | '(' | ')' | '{' | '}' | '[' | ']' | '^' | '"' | '~'
+            | '*' | '?' | ':' | '\\' | '/' => {
+                out.push('\\');
+                out.push(c);
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// Get the Hermes git SHA and version string.
 fn hermes_identity(docs_root: &Path) -> (String, String) {
-    let hermes_root = docs_root
-        .parent() // docs
-        .and_then(|p| p.parent()) // website
-        .and_then(|p| p.parent()); // hermes-agent
+    let hermes_root = hermes_agent_root(docs_root);
 
     let sha = hermes_root
         .and_then(|r| {
@@ -393,9 +411,23 @@ pub fn query(
     let f_body = schema.get_field("body").unwrap();
 
     let query_parser = QueryParser::for_index(&index, vec![f_body, f_heading]);
-    let q = query_parser
-        .parse_query(query_str)
-        .map_err(|e| SearchError::Internal(format!("parse query failed: {e}")))?;
+    let cleaned: String = query_str
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' || c == '.' || c.is_whitespace() {
+                c
+            } else {
+                ' '
+            }
+        })
+        .collect();
+    let cleaned = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    let parsed = if cleaned.is_empty() {
+        query_parser.parse_query(&escape_user_query(query_str))
+    } else {
+        query_parser.parse_query(&cleaned)
+    };
+    let q = parsed.map_err(|e| SearchError::Internal(format!("parse query failed: {e}")))?;
 
     let top_hits: Vec<(f32, tantivy::DocAddress)> = searcher
         .search(&q, &TopDocs::with_limit(top_k.max(1)))
@@ -626,6 +658,35 @@ More text."#;
         assert_eq!(
             url_for_relpath("tools/toolsets.mdx"),
             "https://hermes-agent.nousresearch.com/docs/tools/toolsets"
+        );
+    }
+
+    #[test]
+    fn test_hermes_agent_root_is_two_parents() {
+        let docs = Path::new("/home/you/.hermes/hermes-agent/website/docs");
+        assert_eq!(
+            hermes_agent_root(docs),
+            Some(Path::new("/home/you/.hermes/hermes-agent"))
+        );
+    }
+
+    #[test]
+    fn test_escape_user_query() {
+        assert_eq!(escape_user_query("config.yaml: providers"), r"config.yaml\: providers");
+        assert_eq!(escape_user_query("foo (bar)"), r"foo \(bar\)");
+    }
+
+    #[test]
+    fn test_query_with_special_chars() {
+        let tmp = TempDir::new().unwrap();
+        let docs = tmp.path().join("docs");
+        setup_fixtures(&docs);
+        let cache = tmp.path().join("cache");
+        reindex(&docs, &cache).unwrap();
+        let results = query(&cache, "how do I set HERMES_HOME (config.yaml)?", 5).unwrap();
+        assert!(
+            results.iter().any(|h| h.body.contains("HERMES_HOME")),
+            "punctuation in the question must not empty-out retrieval; got {results:?}"
         );
     }
 }
