@@ -72,6 +72,7 @@ ln -s $(pwd)/skills/hermes-docs ~/.hermes/skills/hermes-docs
 
 (or the profile path `~/.hermes/profiles/<name>/skills/hermes-docs`).
 
-## Contract
+## Documentation
 
-[CONTRACT.md](CONTRACT.md) is the full spec for CLI flags, output templates, JSON shape, exit codes, docs-root resolution, and skill behavior.
+- [CONTRACT.md](CONTRACT.md) — source of truth for CLI flags, output formats, exit codes, docs-root resolution, and skill behavior
+- [skills/hermes-docs/SKILL.md](skills/hermes-docs/SKILL.md) — agent behavior rules for the `hermes-docs` skill
