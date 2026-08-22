@@ -64,6 +64,14 @@ The skill wrapper (`skills/hermes-docs/scripts/hermes-docs`) injects `-k 3` when
 cargo test
 ```
 
+Development tip: symlink the local skill into your Hermes skills folder so edits are live without re-copying:
+
+```bash
+ln -s $(pwd)/skills/hermes-docs ~/.hermes/skills/hermes-docs
+```
+
+(or the profile path `~/.hermes/profiles/<name>/skills/hermes-docs`).
+
 ## Contract
 
 [CONTRACT.md](CONTRACT.md) is the full spec for CLI flags, output templates, JSON shape, exit codes, docs-root resolution, and skill behavior.
