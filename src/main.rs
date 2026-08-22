@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::process;
 
 use clap::Parser;
-use engine::{query, SearchHit};
+use engine::{flat_hits, query, QueryOutput};
 use error::SearchError;
 use serde::Serialize;
 
@@ -19,7 +19,7 @@ struct Cli {
     /// The search query.
     query: String,
 
-    /// Number of results to return (default: 5).
+    /// Max hits to keep per docs category (default: 5).
     #[arg(short = 'k', long = "top-k", default_value_t = 5, value_name = "N")]
     top_k: usize,
 
@@ -44,7 +44,8 @@ struct Cli {
 struct JsonOutput {
     query: String,
     docs_path: String,
-    results: Vec<SearchHit>,
+    signals: engine::QuerySignals,
+    categories: Vec<engine::CategoryHits>,
 }
 
 fn main() {
@@ -73,37 +74,53 @@ fn run(cli: &Cli) -> Result<(), SearchError> {
         engine::ensure_indexed(&docs_root, &cache_dir)?;
     }
 
-    let hits = query(&cache_dir, &cli.query, cli.top_k)?;
+    let out = query(&cache_dir, &cli.query, cli.top_k)?;
 
     if cli.json {
-        let out = JsonOutput {
+        let json = JsonOutput {
             query: cli.query.clone(),
             docs_path: docs_root.to_string_lossy().into_owned(),
-            results: hits,
+            signals: out.signals.clone(),
+            categories: out.categories,
         };
-        println!("{}", serde_json::to_string_pretty(&out)?);
+        println!("{}", serde_json::to_string_pretty(&json)?);
     } else {
-        print_markdown(&cli.query, &hits);
+        print_markdown(&cli.query, &out);
     }
 
     Ok(())
 }
 
-fn print_markdown(query: &str, hits: &[SearchHit]) {
+fn print_markdown(query: &str, out: &QueryOutput) {
     println!("# Hermes docs search: {query}");
-    if hits.is_empty() {
+    println!();
+    println!(
+        "signals: on_topic={} max_bm25={:.4} token_coverage={:.2} content_tokens={:?} matched={:?}",
+        out.signals.on_topic,
+        out.signals.max_bm25,
+        out.signals.token_coverage,
+        out.signals.content_tokens,
+        out.signals.matched_content_tokens
+    );
+
+    let hits = flat_hits(out);
+    if !out.signals.on_topic || hits.is_empty() {
         println!();
         println!("_No hits._");
         return;
     }
-    for (i, hit) in hits.iter().enumerate() {
-        let rank = i + 1;
+
+    for cat in &out.categories {
         println!();
-        println!("## {}. {} — {}", rank, hit.path, hit.heading);
-        println!("URL: {}", hit.url);
-        println!("Score: {:.4}", hit.score);
-        println!();
-        println!("{}", hit.body);
+        println!("## category: {}", cat.category);
+        for hit in &cat.hits {
+            println!();
+            println!("### {}. {} — {}", hit.rank, hit.path, hit.heading);
+            println!("URL: {}", hit.url);
+            println!("Score: {:.4}", hit.score);
+            println!();
+            println!("{}", hit.body);
+        }
     }
 }
 

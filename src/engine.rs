@@ -13,14 +13,360 @@ use crate::error::SearchError;
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct SearchHit {
+    pub rank: usize,
+    pub category: String,
     pub path: String,
     pub heading: String,
     pub url: String,
+    /// Raw BM25 score from Tantivy (higher = stronger lexical match).
     pub score: f32,
     pub body: String,
 }
 
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct CategoryHits {
+    pub category: String,
+    pub hits: Vec<SearchHit>,
+}
+
+/// Retrieval quality signals for the caller (not ranking instructions).
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct QuerySignals {
+    pub max_bm25: f32,
+    pub hit_count: usize,
+    pub query_tokens: Vec<String>,
+    /// Query tokens excluding brand-only noise (`hermes`, `agent`, …).
+    pub content_tokens: Vec<String>,
+    pub matched_content_tokens: Vec<String>,
+    /// `matched_content_tokens.len() / content_tokens.len()`, or `1.0` when
+    /// there are no content tokens (brand-only / stopword-only query).
+    pub token_coverage: f32,
+    /// False when content tokens exist but not all appear in retrieved hits.
+    pub on_topic: bool,
+}
+
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct QueryOutput {
+    pub signals: QuerySignals,
+    pub categories: Vec<CategoryHits>,
+}
+
 const BASE_URL: &str = "https://hermes-agent.nousresearch.com/docs";
+
+/// Strip from BM25 query — question glue words only.
+fn is_search_noise_token(t: &str) -> bool {
+    matches!(
+        t,
+        "how" | "do" | "i" | "a" | "an" | "the" | "to" | "for" | "of" | "and" | "or" | "in"
+            | "on" | "is" | "are" | "with" | "my" | "me" | "what" | "does" | "can" | "please"
+            | "help" | "many" | "much" | "have" | "has" | "her" | "his" | "their" | "our" | "your"
+            | "into" | "from" | "set" | "up" | "setup"
+    )
+}
+
+/// Strip from on_topic / content-token signals — includes generic config verbs.
+fn is_signal_noise_token(t: &str) -> bool {
+    is_search_noise_token(t)
+        || matches!(
+            t,
+            "set" | "up" | "setup" | "configure" | "configuration" | "default" | "main" | "use"
+                | "get" | "make" | "new" | "all" | "any"
+        )
+}
+
+fn is_brand_token(t: &str) -> bool {
+    matches!(
+        t,
+        "hermes" | "agent" | "nous" | "nousresearch" | "docs" | "documentation"
+    )
+}
+
+fn tokens_filtered(cleaned: &str, noise: fn(&str) -> bool) -> Vec<String> {
+    cleaned
+        .split_whitespace()
+        .map(|t| t.to_lowercase())
+        .filter(|t| t.len() >= 3 && !noise(t))
+        .collect()
+}
+
+fn query_tokens(cleaned: &str) -> Vec<String> {
+    tokens_filtered(cleaned, is_signal_noise_token)
+}
+
+/// Light query expansion for BM25 (not ranking overrides).
+fn expand_search_tokens(cleaned: &str, mut tokens: Vec<String>) -> Vec<String> {
+    let lower = cleaned.to_lowercase();
+    let words: Vec<&str> = lower.split_whitespace().collect();
+
+    for (verb, ing) in [("set", "setting"), ("configure", "configuring")] {
+        if words.iter().any(|w| *w == verb) && !tokens.iter().any(|t| t == ing) {
+            tokens.push(ing.to_string());
+        }
+    }
+
+    // Docs often say "main model" where users say "default model".
+    if tokens.iter().any(|t| t == "default") && tokens.iter().any(|t| t == "model") {
+        if !tokens.iter().any(|t| t == "main") {
+            tokens.push("main".to_string());
+        }
+    }
+
+    tokens
+}
+
+/// BM25 query string: search tokens (milder stopword list than signals).
+fn search_query(cleaned: &str, raw: &str) -> String {
+    let tokens = expand_search_tokens(cleaned, tokens_filtered(cleaned, is_search_noise_token));
+    if tokens.is_empty() {
+        if cleaned.is_empty() {
+            escape_user_query(raw)
+        } else {
+            cleaned.to_string()
+        }
+    } else {
+        tokens.join(" ")
+    }
+}
+
+fn content_tokens(tokens: &[String]) -> Vec<String> {
+    tokens
+        .iter()
+        .filter(|t| !is_brand_token(t))
+        .cloned()
+        .collect()
+}
+
+fn category_for_path(path: &str) -> String {
+    path.split('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("other")
+        .to_string()
+}
+
+/// Bucket order in JSON output. `guides` is supplementary — listed after canonical sections.
+fn category_bucket_priority(name: &str) -> u8 {
+    match name {
+        "getting-started" => 0,
+        "user-guide" => 1,
+        "reference" => 2,
+        "integrations" => 3,
+        "developer-guide" => 4,
+        "guides" => 10,
+        _ => 5,
+    }
+}
+
+fn category_hit_cap(category: &str, per_cat: usize) -> usize {
+    if category == "guides" {
+        per_cat.min(2)
+    } else {
+        per_cat
+    }
+}
+
+fn hit_text_blob(path: &str, heading: &str, body: &str) -> String {
+    format!("{path}\n{heading}\n{body}").to_lowercase()
+}
+
+fn matched_content_tokens(content: &[String], hits: &[SearchHit]) -> Vec<String> {
+    if content.is_empty() || hits.is_empty() {
+        return Vec::new();
+    }
+    let blob: String = hits
+        .iter()
+        .map(|h| hit_text_blob(&h.path, &h.heading, &h.body))
+        .collect::<Vec<_>>()
+        .join("\n");
+    content
+        .iter()
+        .filter(|t| blob.contains(t.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// Flatten category buckets into score-sorted hits (for tests / markdown).
+pub fn flat_hits(out: &QueryOutput) -> Vec<&SearchHit> {
+    let mut hits: Vec<&SearchHit> = out.categories.iter().flat_map(|c| c.hits.iter()).collect();
+    hits.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    hits
+}
+
+const DIVERSITY_TOP_PATHS: usize = 5;
+const DIVERSITY_CHUNKS_PER_PATH: usize = 5;
+const DIVERSITY_GLOBAL_TOP: usize = 15;
+/// Minimum path representation before score-order fill (avoids one doc monopolizing cap).
+const DIVERSITY_SEAT_PATHS: usize = 2;
+
+/// Merge global top hits with up to K chunks from each of the top P paths per category.
+fn diversify_hits(scored: Vec<SearchHit>) -> Vec<SearchHit> {
+    if scored.is_empty() {
+        return scored;
+    }
+
+    let mut out: Vec<SearchHit> = Vec::new();
+    let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+
+    let mut push = |hit: SearchHit| {
+        let key = (hit.path.clone(), hit.heading.clone());
+        if seen.insert(key) {
+            out.push(hit);
+        }
+    };
+
+    for hit in scored.iter().take(DIVERSITY_GLOBAL_TOP) {
+        push(hit.clone());
+    }
+
+    let mut by_category: std::collections::HashMap<String, Vec<SearchHit>> =
+        std::collections::HashMap::new();
+    for hit in &scored {
+        by_category
+            .entry(hit.category.clone())
+            .or_default()
+            .push(hit.clone());
+    }
+
+    for cat_hits in by_category.into_values() {
+        let mut by_path: std::collections::HashMap<String, Vec<SearchHit>> =
+            std::collections::HashMap::new();
+        for hit in cat_hits {
+            by_path.entry(hit.path.clone()).or_default().push(hit);
+        }
+
+        let mut path_peaks: Vec<(String, f32)> = by_path
+            .iter()
+            .map(|(path, hits)| {
+                let peak = hits.iter().map(|h| h.score).fold(0.0_f32, f32::max);
+                (path.clone(), peak)
+            })
+            .collect();
+        path_peaks.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        for (path, _) in path_peaks.into_iter().take(DIVERSITY_TOP_PATHS) {
+            let mut chunks = by_path.remove(&path).unwrap_or_default();
+            chunks.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            for hit in chunks.into_iter().take(DIVERSITY_CHUNKS_PER_PATH) {
+                push(hit);
+            }
+        }
+    }
+
+    out.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    for (i, hit) in out.iter_mut().enumerate() {
+        hit.rank = i + 1;
+    }
+    out
+}
+
+/// Fill category buckets: one hit from each top path, then score-order fill to cap.
+fn bucket_into_categories(
+    diversified: Vec<SearchHit>,
+    per_cat: usize,
+) -> std::collections::BTreeMap<String, Vec<SearchHit>> {
+    let mut by_cat_hits: std::collections::HashMap<String, Vec<SearchHit>> =
+        std::collections::HashMap::new();
+    for hit in &diversified {
+        by_cat_hits
+            .entry(hit.category.clone())
+            .or_default()
+            .push(hit.clone());
+    }
+
+    let mut by_cat: std::collections::BTreeMap<String, Vec<SearchHit>> =
+        std::collections::BTreeMap::new();
+
+    for (cat, cat_hits) in by_cat_hits {
+        let cap = category_hit_cap(&cat, per_cat);
+        let max_per_path_in_cat = ((cap + 1) / 2).max(2);
+        let mut by_path: std::collections::HashMap<String, Vec<SearchHit>> =
+            std::collections::HashMap::new();
+        for hit in cat_hits {
+            by_path.entry(hit.path.clone()).or_default().push(hit);
+        }
+
+        let mut paths: Vec<(String, Vec<SearchHit>)> = by_path.into_iter().collect();
+        for (_, chunks) in paths.iter_mut() {
+            chunks.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+        paths.sort_by(|a, b| {
+            let pa = a.1.first().map(|h| h.score).unwrap_or(0.0);
+            let pb = b.1.first().map(|h| h.score).unwrap_or(0.0);
+            pb.partial_cmp(&pa).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let mut out: Vec<SearchHit> = Vec::new();
+        let mut seen: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+        let mut path_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+
+        let try_push = |hit: SearchHit, out: &mut Vec<SearchHit>, seen: &mut std::collections::HashSet<(String, String)>, path_counts: &mut std::collections::HashMap<String, usize>| -> bool {
+            let key = (hit.path.clone(), hit.heading.clone());
+            if !seen.insert(key) {
+                return false;
+            }
+            *path_counts.entry(hit.path.clone()).or_insert(0) += 1;
+            out.push(hit);
+            true
+        };
+
+        // Seat: best chunk from the top few paths so secondary docs are not crowded out.
+        for (_, chunks) in paths.iter().take(DIVERSITY_SEAT_PATHS.min(paths.len())) {
+            if out.len() >= cap {
+                break;
+            }
+            if let Some(hit) = chunks.first() {
+                try_push(hit.clone(), &mut out, &mut seen, &mut path_counts);
+            }
+        }
+
+        // Fill remaining slots by score, up to max_per_path_in_cat chunks per path.
+        let mut remaining: Vec<SearchHit> = diversified
+            .iter()
+            .filter(|h| h.category == cat)
+            .cloned()
+            .collect();
+        remaining.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for hit in remaining {
+            if out.len() >= cap {
+                break;
+            }
+            let n = path_counts.get(&hit.path).copied().unwrap_or(0);
+            if n >= max_per_path_in_cat {
+                continue;
+            }
+            try_push(hit, &mut out, &mut seen, &mut path_counts);
+        }
+
+        by_cat.insert(cat, out);
+    }
+
+    by_cat
+}
 
 /// Resolve the docs root directory.
 ///
@@ -146,21 +492,29 @@ fn build_schema() -> Schema {
 }
 
 /// Split markdown content on `##` and `###` headings, stripping light MDX import noise.
+/// `###` chunks keep a parent prefix (`H2 > H3`) so advanced subsections stay identifiable.
 fn chunk_markdown(content: &str, rel_path: &str) -> Vec<(String, String)> {
     let mut chunks: Vec<(String, String)> = Vec::new();
     let mut heading = String::new();
+    let mut parent_h2 = String::new();
     let mut body_lines: Vec<&str> = Vec::new();
 
     for line in content.lines() {
         let trimmed = line.trim_start();
         if trimmed.starts_with("## ") || trimmed.starts_with("### ") {
             let body = body_lines.join("\n").trim().to_string();
-            if !body.is_empty() || !heading.is_empty() {
-                if !body.is_empty() {
-                    chunks.push((heading.clone(), body));
-                }
+            if !body.is_empty() {
+                chunks.push((heading.clone(), body));
             }
-            heading = trimmed.trim_start_matches('#').trim().to_string();
+            let title = trimmed.trim_start_matches('#').trim().to_string();
+            if trimmed.starts_with("## ") {
+                parent_h2 = title.clone();
+                heading = title;
+            } else if parent_h2.is_empty() {
+                heading = title;
+            } else {
+                heading = format!("{parent_h2} > {title}");
+            }
             body_lines.clear();
         } else {
             let t = trimmed.trim();
@@ -390,12 +744,15 @@ pub fn reindex(docs_root: &Path, cache_dir: &Path) -> Result<(), SearchError> {
     Ok(())
 }
 
-/// Run a BM25 query and return top-k hits.
+/// Run a BM25 query and return hits grouped by top-level docs category.
+///
+/// Scores are raw BM25. Callers (or an LLM) interpret `signals` + categories;
+/// this function does not pick a "primary" document.
 pub fn query(
     cache_dir: &Path,
     query_str: &str,
     top_k: usize,
-) -> Result<Vec<SearchHit>, SearchError> {
+) -> Result<QueryOutput, SearchError> {
     let mmap_dir = MmapDirectory::open(index_path(cache_dir))
         .map_err(|e| SearchError::Internal(format!("failed to open index dir: {e}")))?;
     let index = Index::open(mmap_dir)
@@ -410,7 +767,6 @@ pub fn query(
     let f_heading = schema.get_field("heading").unwrap();
     let f_body = schema.get_field("body").unwrap();
 
-    let query_parser = QueryParser::for_index(&index, vec![f_body, f_heading]);
     let cleaned: String = query_str
         .chars()
         .map(|c| {
@@ -422,18 +778,25 @@ pub fn query(
         })
         .collect();
     let cleaned = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
-    let parsed = if cleaned.is_empty() {
-        query_parser.parse_query(&escape_user_query(query_str))
-    } else {
-        query_parser.parse_query(&cleaned)
-    };
+    let tokens = query_tokens(&cleaned);
+    let content = content_tokens(&tokens);
+
+    let mut query_parser = QueryParser::for_index(&index, vec![f_path, f_heading, f_body]);
+    query_parser.set_field_boost(f_path, 10.0);
+    query_parser.set_field_boost(f_heading, 2.5);
+    query_parser.set_field_boost(f_body, 1.0);
+
+    let parsed = query_parser.parse_query(&search_query(&cleaned, query_str));
     let q = parsed.map_err(|e| SearchError::Internal(format!("parse query failed: {e}")))?;
 
+    let per_cat = top_k.max(1);
+    let candidate_limit = (per_cat * DIVERSITY_TOP_PATHS * DIVERSITY_CHUNKS_PER_PATH * 32)
+        .clamp(512, 2500);
     let top_hits: Vec<(f32, tantivy::DocAddress)> = searcher
-        .search(&q, &TopDocs::with_limit(top_k.max(1)))
+        .search(&q, &TopDocs::with_limit(candidate_limit))
         .map_err(|e| SearchError::Internal(format!("search failed: {e}")))?;
 
-    let mut results = Vec::new();
+    let mut scored: Vec<SearchHit> = Vec::new();
     for (score, doc_addr) in top_hits {
         let doc: tantivy::TantivyDocument = searcher
             .doc(doc_addr)
@@ -446,7 +809,9 @@ pub fn query(
             })
             .unwrap_or("")
             .to_string();
-        let heading = doc.get_first(f_heading).and_then(|v| match v {
+        let heading = doc
+            .get_first(f_heading)
+            .and_then(|v| match v {
                 OwnedValue::Str(s) => Some(s.as_str()),
                 _ => None,
             })
@@ -460,8 +825,11 @@ pub fn query(
             })
             .unwrap_or("")
             .to_string();
+        let category = category_for_path(&path);
 
-        results.push(SearchHit {
+        scored.push(SearchHit {
+            rank: 0,
+            category,
             url: url_for_relpath(&path),
             path,
             heading,
@@ -470,7 +838,70 @@ pub fn query(
         });
     }
 
-    Ok(results)
+    scored.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let matched = matched_content_tokens(&content, &scored);
+    let token_coverage = if content.is_empty() {
+        1.0
+    } else {
+        matched.len() as f32 / content.len() as f32
+    };
+    let on_topic = if content.is_empty() {
+        !scored.is_empty()
+    } else {
+        matched.len() == content.len()
+    };
+
+    let max_bm25 = scored.first().map(|h| h.score).unwrap_or(0.0);
+
+    if !on_topic {
+        return Ok(QueryOutput {
+            signals: QuerySignals {
+                max_bm25,
+                hit_count: 0,
+                query_tokens: tokens,
+                content_tokens: content,
+                matched_content_tokens: matched,
+                token_coverage,
+                on_topic: false,
+            },
+            categories: Vec::new(),
+        });
+    }
+
+    let diversified = diversify_hits(scored);
+    let by_cat = bucket_into_categories(diversified, per_cat);
+    let mut categories: Vec<CategoryHits> = by_cat
+        .into_iter()
+        .map(|(category, hits)| CategoryHits { category, hits })
+        .collect();
+    categories.sort_by(|a, b| {
+        category_bucket_priority(&a.category)
+            .cmp(&category_bucket_priority(&b.category))
+            .then_with(|| {
+                let sa = a.hits.first().map(|h| h.score).unwrap_or(0.0);
+                let sb = b.hits.first().map(|h| h.score).unwrap_or(0.0);
+                sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+    let hit_count: usize = categories.iter().map(|c| c.hits.len()).sum();
+
+    Ok(QueryOutput {
+        signals: QuerySignals {
+            max_bm25,
+            hit_count,
+            query_tokens: tokens,
+            content_tokens: content,
+            matched_content_tokens: matched,
+            token_coverage,
+            on_topic: true,
+        },
+        categories,
+    })
 }
 
 #[cfg(test)]
@@ -563,6 +994,7 @@ HERMES_DOCS_PATH can override where docs are read from.
         );
         let headings: Vec<&str> = chunks.iter().map(|(h, _)| h.as_str()).collect();
         assert!(headings.contains(&"Section A"));
+        assert!(headings.contains(&"Section A > Sub A"));
         assert!(headings.contains(&"Section B"));
     }
 
@@ -594,10 +1026,12 @@ More text."#;
 
         reindex(&docs, &cache).unwrap();
 
-        let results = query(&cache, "configuration", 3).unwrap();
-        assert!(!results.is_empty(), "expected results for 'configuration'");
-        assert!(results[0].path.contains("config"));
-        assert!(results[0].url.contains("hermes-agent.nousresearch.com/docs"));
+        let out = query(&cache, "configuration", 3).unwrap();
+        let hits = flat_hits(&out);
+        assert!(!hits.is_empty(), "expected results for 'configuration'");
+        assert!(hits[0].path.contains("config"));
+        assert!(hits[0].url.contains("hermes-agent.nousresearch.com/docs"));
+        assert!(out.signals.on_topic);
     }
 
     #[test]
@@ -610,8 +1044,274 @@ More text."#;
 
         reindex(&docs, &cache).unwrap();
 
-        let results = query(&cache, "zzzzzqqqqqqxxx", 5).unwrap();
-        assert!(results.is_empty());
+        let out = query(&cache, "zzzzzqqqqqqxxx", 5).unwrap();
+        assert!(flat_hits(&out).is_empty());
+        assert!(!out.signals.on_topic);
+    }
+
+    #[test]
+    fn test_off_topic_query_clears_categories() {
+        let tmp = TempDir::new().unwrap();
+        let docs = tmp.path().join("docs");
+        setup_fixtures(&docs);
+        let cache = tmp.path().join("cache");
+        reindex(&docs, &cache).unwrap();
+
+        let out = query(
+            &cache,
+            "how many dildos does the hermes girl have in her dresser drawer",
+            5,
+        )
+        .unwrap();
+        assert!(
+            !out.signals.on_topic,
+            "expected off-topic; signals={:?}",
+            out.signals
+        );
+        assert!(
+            out.categories.is_empty(),
+            "off-topic queries must not dump docs; got {:?}",
+            out.categories
+        );
+        assert_eq!(out.signals.hit_count, 0);
+        assert!(out.signals.content_tokens.iter().any(|t| t == "dildos"));
+        assert!(out.signals.matched_content_tokens.is_empty());
+    }
+
+    #[test]
+    fn test_partial_content_token_match_is_off_topic() {
+        let tmp = TempDir::new().unwrap();
+        let docs = tmp.path().join("docs");
+        fs::create_dir_all(docs.join("misc")).unwrap();
+        fs::write(
+            docs.join("misc/random.md"),
+            "# Random\n\nA girl opened her dresser drawer for storage.\n",
+        )
+        .unwrap();
+        let cache = tmp.path().join("cache");
+        reindex(&docs, &cache).unwrap();
+
+        let out = query(
+            &cache,
+            "how many dildos does the hermes girl have in her dresser drawer",
+            5,
+        )
+        .unwrap();
+        assert!(
+            !out.signals.on_topic,
+            "partial overlap must not count as on-topic; matched={:?}",
+            out.signals.matched_content_tokens
+        );
+        assert!(out.categories.is_empty());
+        assert_eq!(out.signals.hit_count, 0);
+    }
+
+    #[test]
+    fn test_per_path_diversity_includes_setup_chunks() {
+        let tmp = TempDir::new().unwrap();
+        let docs = tmp.path().join("docs");
+        fs::create_dir_all(docs.join("user-guide/messaging")).unwrap();
+        fs::write(
+            docs.join("user-guide/messaging/discord.md"),
+            r#"# Discord Setup
+
+## Step 1: Create a Discord Application
+
+Visit the Discord Developer Portal and create an application.
+
+## How Hermes Behaves
+
+Discord gateway model uses DISCORD_ALLOWED_USERS for access control.
+
+## Step 8: Configure Hermes Agent
+
+### Option A: Interactive Setup (Recommended)
+
+Run hermes gateway setup and select Discord.
+
+### Option B: Manual Configuration
+
+Add to ~/.hermes/.env:
+
+DISCORD_BOT_TOKEN=your-bot-token
+DISCORD_ALLOWED_USERS=284102345871466496
+
+### Start the Gateway
+
+Run hermes gateway to bring the bot online.
+"#,
+        )
+        .unwrap();
+        fs::write(
+            docs.join("user-guide/noise.md"),
+            r#"# Noise
+
+## Configure everything
+
+Configure configure configure discord discord for filler BM25 score.
+"#,
+        )
+        .unwrap();
+
+        let cache = tmp.path().join("cache");
+        reindex(&docs, &cache).unwrap();
+
+        let out = query(&cache, "how do I configure Discord?", 5).unwrap();
+        assert!(out.signals.on_topic);
+
+        let discord_hits: Vec<_> = flat_hits(&out)
+            .into_iter()
+            .filter(|h| h.path.contains("messaging/discord"))
+            .collect();
+        assert!(
+            discord_hits.len() >= 2,
+            "expected multiple discord.md chunks; got {}",
+            discord_hits.len()
+        );
+
+        let bodies: String = discord_hits.iter().map(|h| h.body.as_str()).collect();
+        assert!(
+            bodies.contains("DISCORD_BOT_TOKEN"),
+            "expected token literal from discord.md; hits={discord_hits:?}"
+        );
+        assert!(
+            bodies.contains("hermes gateway setup") || bodies.contains("hermes gateway"),
+            "expected gateway commands from discord.md; hits={discord_hits:?}"
+        );
+    }
+
+    #[test]
+    fn test_categories_include_messaging_and_guides() {
+        let tmp = TempDir::new().unwrap();
+        let docs = tmp.path().join("docs");
+        fs::create_dir_all(docs.join("user-guide/messaging")).unwrap();
+        fs::create_dir_all(docs.join("guides")).unwrap();
+        fs::write(
+            docs.join("user-guide/messaging/telegram.md"),
+            r#"# Telegram
+
+## Gateway setup
+
+Configure Telegram with TELEGRAM_BOT_TOKEN in ~/.hermes/.env.
+Run hermes gateway setup, then start the gateway for Telegram messaging.
+"#,
+        )
+        .unwrap();
+        fs::write(
+            docs.join("guides/local-ollama-setup.md"),
+            r#"# Local Ollama setup
+
+## Platforms
+
+You can also mention Telegram briefly:
+
+```yaml
+platforms:
+  telegram:
+    token: "..."
+```
+
+This guide is mostly about Ollama, not Telegram gateway setup.
+"#,
+        )
+        .unwrap();
+
+        let cache = tmp.path().join("cache");
+        reindex(&docs, &cache).unwrap();
+
+        let out = query(&cache, "how do I configure Telegram?", 5).unwrap();
+        assert!(out.signals.on_topic);
+        assert!(
+            out.signals
+                .matched_content_tokens
+                .iter()
+                .any(|t| t == "telegram"),
+            "signals={:?}",
+            out.signals
+        );
+        let paths: Vec<&str> = flat_hits(&out).iter().map(|h| h.path.as_str()).collect();
+        assert!(
+            paths.iter().any(|p| p.contains("telegram")),
+            "expected telegram paths; got {paths:?}"
+        );
+        let tg_bodies: String = flat_hits(&out)
+            .iter()
+            .filter(|h| h.path.contains("messaging/telegram"))
+            .map(|h| h.body.as_str())
+            .collect();
+        if !tg_bodies.is_empty() {
+            assert!(
+                tg_bodies.contains("TELEGRAM_BOT_TOKEN") || tg_bodies.contains("BotFather"),
+                "expected setup literals in telegram.md chunks; bodies={tg_bodies:?}"
+            );
+        }
+        let cats: Vec<&str> = out.categories.iter().map(|c| c.category.as_str()).collect();
+        assert!(
+            cats.contains(&"user-guide") || cats.contains(&"guides"),
+            "expected category buckets; got {cats:?}"
+        );
+        if cats.contains(&"user-guide") && cats.contains(&"guides") {
+            let ug = cats.iter().position(|&c| c == "user-guide").unwrap();
+            let g = cats.iter().position(|&c| c == "guides").unwrap();
+            assert!(
+                ug < g,
+                "user-guide should appear before guides; got {cats:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_default_model_surfaces_configuring_models() {
+        let tmp = TempDir::new().unwrap();
+        let docs = tmp.path().join("docs");
+        fs::create_dir_all(docs.join("user-guide")).unwrap();
+        fs::create_dir_all(docs.join("user-guide/features")).unwrap();
+        fs::write(
+            docs.join("user-guide/configuring-models.md"),
+            r#"# Configuring Models
+
+## Setting the main model
+
+Open the dashboard and click Models. Pick your provider and model ID.
+The main model field in config.yaml controls what the agent uses.
+
+```yaml
+model:
+  provider: openrouter
+  default: anthropic/claude-sonnet-4
+```
+"#,
+        )
+        .unwrap();
+        fs::write(
+            docs.join("user-guide/features/extending-the-dashboard.md"),
+            r#"# Dashboard
+
+## Plugins
+
+The default layout uses default theme colors and default plugin slots.
+SDK.components.Button is the default export for dashboard plugins.
+"#,
+        )
+        .unwrap();
+
+        let cache = tmp.path().join("cache");
+        reindex(&docs, &cache).unwrap();
+
+        let out = query(&cache, "how do I set the default model?", 5).unwrap();
+        assert!(out.signals.on_topic, "signals={:?}", out.signals);
+        assert_eq!(
+            out.signals.content_tokens,
+            vec!["model".to_string()],
+            "signal stopwords should leave only 'model'"
+        );
+        let paths: Vec<&str> = flat_hits(&out).iter().map(|h| h.path.as_str()).collect();
+        assert!(
+            paths
+                .iter()
+                .any(|p| p.contains("configuring-models")),
+            "expected configuring-models.md in hits; got {paths:?}"
+        );
     }
 
     #[test]
@@ -683,10 +1383,12 @@ More text."#;
         setup_fixtures(&docs);
         let cache = tmp.path().join("cache");
         reindex(&docs, &cache).unwrap();
-        let results = query(&cache, "how do I set HERMES_HOME (config.yaml)?", 5).unwrap();
+        let out = query(&cache, "how do I set HERMES_HOME (config.yaml)?", 5).unwrap();
         assert!(
-            results.iter().any(|h| h.body.contains("HERMES_HOME")),
-            "punctuation in the question must not empty-out retrieval; got {results:?}"
+            flat_hits(&out)
+                .iter()
+                .any(|h| h.body.contains("HERMES_HOME")),
+            "punctuation in the question must not empty-out retrieval; got {out:?}"
         );
     }
 }

@@ -10,8 +10,7 @@ description: >
 
 # hermes-docs
 
-Retrieve grounded Hermes Agent documentation and answer strictly from the
-retrieved content.
+Retrieve Hermes Agent documentation as structured JSON, then answer from it.
 
 ## When to use
 
@@ -22,43 +21,87 @@ retrieved content.
 
 ## Procedure
 
-Run exactly ONE command, passing the user's question as the query:
+Run exactly ONE command from the skill directory:
 
 ```bash
-scripts/hermes-docs "<user's question>"
+sh scripts/hermes-docs --json "<user's question>"
 ```
+
+The wrapper is a **shell script** (not Node). Do not run it with `node`.
+Do not pass `-8` — that is a common typo; the wrapper maps `-8` → `-k 8`.
+When `--json` is set, the wrapper injects `-k 8` automatically if you omit
+`-k`. Do not add `-k` unless you intentionally want a different hit count.
 
 Rules:
 
-1. **One invocation only.** Do not run the script multiple times with
-   rephrased queries. Do not refine the query in a loop.
-2. **Answer only from stdout.** The script prints ranked markdown chunks with
-   paths, URLs, and scores. Cite the file path and URL for every claim.
-3. **Never invent config.** If retrieval returns no hits or the chunks do not
-   contain the answer, say so explicitly. Do not fabricate config keys, env
-   vars, or defaults.
-4. **Never fall back to other search tools.** Do not use `rg`, `grep`,
-   `search_files`, `glob`, or any file-reading tool to look up docs. Do not
-   fetch the docs website. The script is the only retrieval path.
+1. **One invocation only.** Do not rephrase and re-run.
+2. **Answer from the JSON only.** Use `signals` and `categories` as data.
+   Cite `path` + `url` for every claim. Do not invent config keys.
+   When `user-guide/messaging/*` and `guides/*` both appear for the same
+   topic, lead with the user-guide messaging page; treat `guides/` hits as
+   supplementary examples only.
+3. **Quote technical literals exactly** as they appear in chunk `body` text.
+   Do not rename, abbreviate, or paraphrase:
+   - `config.yaml` keys, nesting, and example values
+   - `.env` variable names (e.g. `TELEGRAM_BOT_TOKEN`, not "the telegram token")
+   - CLI commands and flags (e.g. `hermes gateway setup`, not "run the setup wizard")
+   - File paths the doc shows (e.g. `~/.hermes/.env`, not "your env file")
+   - YAML/JSON/code blocks — preserve spelling, casing, and structure
 
-## Output format the script produces
+   If a literal is not in the retrieved chunks, say so. Do not guess from memory.
 
-```markdown
-# Hermes docs search: <query>
+   Example — chunk says `TELEGRAM_ALLOWED_USERS=123456789`. Your answer uses
+   that exact name and shape, not "allowed user IDs in config".
+4. **Off-topic refusal (hard stop).** When `signals.on_topic` is false **or**
+   `categories` is empty, reply with **one sentence only** — e.g. "The Hermes
+   docs don't cover this." — then **STOP**. No humor, jokes, guesses, numbers,
+   "vibes", meta commentary about the question, or explaining why it is
+   nonsensical. Do not fabricate any answer, including playful ones. Do not
+   search elsewhere.
+5. **Never fall back** to `rg`, `grep`, `search_files`, `glob`, `read_file`, or
+   opening docs under `~/.hermes/hermes-agent/website/docs` — even when JSON
+   chunks look incomplete. Answer from JSON only; say what is missing.
+   Do not read `~/.hermes/config.yaml` or fetch the docs website.
 
-## 1. <relpath> — <heading>
-URL: https://hermes-agent.nousresearch.com/docs/<url-path>
-Score: <score>
+## JSON the script prints
 
-<body>
-
-## 2. ...
+```json
+{
+  "query": "...",
+  "docs_path": "...",
+  "signals": {
+    "max_bm25": 0.0,
+    "hit_count": 0,
+    "query_tokens": [],
+    "content_tokens": [],
+    "matched_content_tokens": [],
+    "token_coverage": 0.0,
+    "on_topic": false
+  },
+  "categories": [
+    {
+      "category": "user-guide",
+      "hits": [
+        {
+          "rank": 1,
+          "category": "user-guide",
+          "path": "...",
+          "heading": "...",
+          "url": "...",
+          "score": 0.0,
+          "body": "..."
+        }
+      ]
+    }
+  ]
+}
 ```
 
-Zero hits prints `_No hits._` and exits 0.
+`score` is raw BM25. Categories are top-level docs folders (`user-guide`,
+`guides`, `reference`, …).
 
 ## Exit codes
 
-- 0 — success (including zero hits)
+- 0 — success (including off-topic / zero hits)
 - 1 — docs path missing or unreadable
 - 2 — internal error

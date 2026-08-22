@@ -13,7 +13,7 @@ Do not rename any identifier in this document. Examples may be expanded; names m
 
 ```
 hermes-docs-search [OPTIONS] <QUERY>
-  -k, --top-k <N>     max results to return (default 5)
+  -k, --top-k <N>     max hits kept per docs category (default 5)
   --json              emit machine-readable JSON instead of the default markdown template
   --reindex           force a full reindex before answering (ignore cached state)
   --docs-path <PATH>  explicit docs root (highest-priority docs-root override)
@@ -106,37 +106,45 @@ files (path, mtime, size) so any content change is detected even without git.
 
 ## Default stdout template
 
-For a non-zero number of hits, stdout is:
+For a non-zero number of on-topic hits, stdout is:
 
 ```markdown
 # Hermes docs search: <query>
 
-## 1. <relpath> — <heading>
+signals: on_topic=... max_bm25=... token_coverage=... content_tokens=[...] matched=[...]
+
+## category: <top-level-path-segment>
+
+### <rank>. <relpath> — <heading>
 URL: https://hermes-agent.nousresearch.com/docs/<url-path>
 Score: <score>
 
 <body>
-
-## 2. ...
 ```
 
 - `<relpath>` — path of the source file relative to the docs root.
-- `<heading>` — the `##`/`###` heading the chunk was split on, or the file's
-  top-level title when the chunk has no heading.
+- `<heading>` — the `##`/`###` heading the chunk was split on (parent `##`
+  prefix kept for `###` chunks as `H2 > H3`), or the file's top-level title
+  when the chunk has no heading.
 - `<url-path>` — the source file's path relative to the docs root with its
   extension dropped (e.g. `configuration.md` → `configuration`), so the URL is
   `https://hermes-agent.nousresearch.com/docs/<url-path>`.
-- `<score>` — the BM25 score, rendered with limited precision.
+- `<score>` — raw BM25 score from Tantivy (higher = stronger lexical match).
 - `<body>` — the chunk text (import noise stripped, code fences preserved).
+- Hits are grouped by the first path segment (`user-guide`, `guides`, …).
+  Within each category, hits are ordered by descending BM25 score.
+- Categories are ordered by each category's best BM25 score.
 
-Chunks are listed in descending score order and numbered from 1.
+### Zero / off-topic hits
 
-### Zero hits
-
-When no chunk matches, the CLI still exits 0 and prints:
+When no chunk matches, or when content tokens from the query do not appear in
+any retrieved hit (brand-only matches like bare "hermes" do not count), the
+CLI still exits 0 and prints:
 
 ```markdown
 # Hermes docs search: <query>
+
+signals: on_topic=false ...
 
 _No hits._
 ```
@@ -147,18 +155,37 @@ _No hits._
 {
   "query": "<query>",
   "docs_path": "<absolute docs root>",
-  "results": [
+  "signals": {
+    "max_bm25": 12.34,
+    "hit_count": 12,
+    "query_tokens": ["telegram"],
+    "content_tokens": ["telegram"],
+    "matched_content_tokens": ["telegram"],
+    "token_coverage": 1.0,
+    "on_topic": true
+  },
+  "categories": [
     {
-      "rank": 1,
-      "path": "<relpath>",
-      "heading": "<heading>",
-      "url": "https://hermes-agent.nousresearch.com/docs/<url-path>",
-      "score": 12.34,
-      "body": "<chunk text>"
+      "category": "user-guide",
+      "hits": [
+        {
+          "rank": 1,
+          "category": "user-guide",
+          "path": "<relpath>",
+          "heading": "<heading>",
+          "url": "https://hermes-agent.nousresearch.com/docs/<url-path>",
+          "score": 12.34,
+          "body": "<chunk text>"
+        }
+      ]
     }
   ]
 }
 ```
+
+`signals` are facts about the retrieval (BM25 + token overlap). `on_topic` is
+`false` when the query has content tokens that never appear in any hit; in that
+case `categories` is an empty array even if BM25 matched brand terms alone.
 
 ---
 
@@ -168,6 +195,19 @@ _No hits._
 - `1` — docs path missing or unreadable (no docs root could be resolved, or it
   cannot be read)
 - `2` — internal error (index build failure, I/O failure, unexpected panic)
+
+---
+
+## Skill (agent) expectations
+
+The `hermes-docs` skill consumes `--json` output and answers from retrieved
+chunks only. When chunks contain technical literals (config keys, env var names,
+CLI commands/flags, paths, YAML/JSON examples), the agent must quote them
+verbatim from `body` text — no renaming or paraphrase. If a literal is missing
+from retrieval, the agent must not invent it. When `signals.on_topic` is false
+or `categories` is empty, the agent must give a one-sentence plain refusal only
+(e.g. "The Hermes docs don't cover this.") and stop — no guesses, humor, or
+commentary.
 
 ---
 

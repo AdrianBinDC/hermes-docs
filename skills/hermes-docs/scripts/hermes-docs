@@ -1,8 +1,84 @@
-#!/bin/sh
+#!/usr/bin/env sh
 # hermes-docs — wrapper for hermes-docs-search
 # PATH → cache → GitHub release (best-effort) → cargo build from this repo
 
 set -eu
+
+DEFAULT_JSON_TOP_K=8
+
+# Last positional argument is the query; everything before it is flags.
+if [ "$#" -lt 1 ]; then
+    echo "error: missing query argument" >&2
+    exit 2
+fi
+
+# Save args — set -- clears positional parameters during rebuild.
+saved_n=$#
+i=1
+while [ "$i" -le "$saved_n" ]; do
+    eval "saved$i=\${$i}"
+    i=$((i + 1))
+done
+
+eval "QUERY=\${saved$saved_n}"
+FLAG_N=$((saved_n - 1))
+
+has_json=0
+has_top_k=0
+
+i=1
+while [ "$i" -le "$FLAG_N" ]; do
+    eval "arg=\${saved$i}"
+    case "$arg" in
+        --json) has_json=1 ;;
+        -k|--top-k) has_top_k=1 ;;
+        --top-k=*) has_top_k=1 ;;
+        -8|-[0-9]*) has_top_k=1 ;;
+    esac
+    i=$((i + 1))
+done
+
+set --
+i=1
+while [ "$i" -le "$FLAG_N" ]; do
+    eval "arg=\${saved$i}"
+    case "$arg" in
+        -8)
+            set -- "$@" -k 8
+            ;;
+        -k|--top-k)
+            set -- "$@" "$arg"
+            i=$((i + 1))
+            if [ "$i" -le "$FLAG_N" ]; then
+                eval "set -- \"\$@\" \"\${saved$i}\""
+            fi
+            ;;
+        --top-k=*)
+            set -- "$@" "$arg"
+            ;;
+        -[0-9]*)
+            n="${arg#-}"
+            case "$n" in
+                *[!0-9]*)
+                    set -- "$@" "$arg"
+                    ;;
+                *)
+                    set -- "$@" -k "$n"
+                    ;;
+            esac
+            ;;
+        *)
+            set -- "$@" "$arg"
+            ;;
+    esac
+    i=$((i + 1))
+done
+
+if [ "$has_json" -eq 1 ] && [ "$has_top_k" -eq 0 ]; then
+    set -- "$@" -k "$DEFAULT_JSON_TOP_K"
+fi
+
+set -- "$@" "$QUERY"
 
 BIN_NAME="hermes-docs-search"
 CACHE_BIN_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/hermes-docs-search/bin"
