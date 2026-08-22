@@ -1,4 +1,49 @@
 //! Core BM25 index and query logic for hermes-docs-search.
+//!
+//! GitHub-rendered diagrams (same content): [`docs/engine.md`](../docs/engine.md).
+//!
+//! ## Query pipeline
+//!
+//! ```mermaid
+//! flowchart TD
+//!   openIndex[Open Tantivy index]
+//!   sanitize[sanitize_query]
+//!   tokenize[query_tokens and content_tokens]
+//!   search[Parse BM25 query and search]
+//!   extract[extract_hits]
+//!   signals[Compute coverage and on_topic]
+//!   emptyCheck{Index empty?}
+//!   topicCheck{on_topic?}
+//!   diversify[diversify_hits]
+//!   orderCats[order_categories]
+//!   outEmpty[QueryOutput docs_empty]
+//!   outOff[QueryOutput off_topic]
+//!   outOk[QueryOutput with categories]
+//!
+//!   openIndex --> sanitize --> tokenize --> search --> extract --> signals
+//!   signals --> emptyCheck
+//!   emptyCheck -->|yes| outEmpty
+//!   emptyCheck -->|no| topicCheck
+//!   topicCheck -->|no| outOff
+//!   topicCheck -->|yes| diversify --> orderCats --> outOk
+//! ```
+//!
+//! ## Index pipeline
+//!
+//! ```mermaid
+//! flowchart TD
+//!   ensure[ensure_indexed]
+//!   stale{State stale or missing?}
+//!   reindex[reindex]
+//!   walk[Walk docs md and mdx]
+//!   chunk[chunk_markdown]
+//!   write[Write Tantivy docs]
+//!   state[save_state fingerprint]
+//!
+//!   ensure --> stale
+//!   stale -->|no| doneNode[Use cached index]
+//!   stale -->|yes| reindex --> walk --> chunk --> write --> state
+//! ```
 
 use std::path::{Path, PathBuf};
 
@@ -64,68 +109,35 @@ const BASE_URL: &str = "https://hermes-agent.nousresearch.com/docs";
 const OVERSIZED_CHUNK_BYTES: usize = 4096;
 
 /// Strip from BM25 query — question glue words only.
+const SEARCH_NOISE_TOKENS: &[&str] = &[
+    "how", "do", "i", "a", "an", "the", "to", "for", "of", "and", "or", "in", "on", "is", "are",
+    "with", "my", "me", "what", "does", "can", "please", "help", "many", "much", "have", "has",
+    "her", "his", "their", "our", "your", "into", "from", "set", "up", "setup",
+];
+
 fn is_search_noise_token(t: &str) -> bool {
-    matches!(
-        t,
-        "how"
-            | "do"
-            | "i"
-            | "a"
-            | "an"
-            | "the"
-            | "to"
-            | "for"
-            | "of"
-            | "and"
-            | "or"
-            | "in"
-            | "on"
-            | "is"
-            | "are"
-            | "with"
-            | "my"
-            | "me"
-            | "what"
-            | "does"
-            | "can"
-            | "please"
-            | "help"
-            | "many"
-            | "much"
-            | "have"
-            | "has"
-            | "her"
-            | "his"
-            | "their"
-            | "our"
-            | "your"
-            | "into"
-            | "from"
-            | "set"
-            | "up"
-            | "setup"
-    )
+    SEARCH_NOISE_TOKENS.contains(&t)
 }
 
-/// Strip from `on_topic` / content-token signals — includes generic config verbs.
+/// Extra tokens stripped from `on_topic` / content-token signals (generic config verbs).
+const SIGNAL_NOISE_TOKENS: &[&str] = &[
+    "set",
+    "up",
+    "setup",
+    "configure",
+    "configuration",
+    "default",
+    "main",
+    "use",
+    "get",
+    "make",
+    "new",
+    "all",
+    "any",
+];
+
 fn is_signal_noise_token(t: &str) -> bool {
-    is_search_noise_token(t)
-        || matches!(
-            t,
-            "set"
-                | "up"
-                | "setup"
-                | "configure"
-                | "configuration"
-                | "default"
-                | "main"
-                | "use"
-                | "get"
-                | "make"
-                | "new"
-                | "all"
-                | "any"
-        )
+    is_search_noise_token(t) || SIGNAL_NOISE_TOKENS.contains(&t)
 }
 
 fn is_brand_token(t: &str) -> bool {
@@ -800,6 +812,13 @@ pub fn reindex(docs_root: &Path, cache_dir: &Path) -> Result<(), SearchError> {
     Ok(())
 }
 
+fn doc_str_field(doc: &tantivy::TantivyDocument, field: tantivy::schema::Field) -> String {
+    doc.get_first(field)
+        .and_then(|v| tantivy::schema::Value::as_str(&v))
+        .unwrap_or("")
+        .to_string()
+}
+
 fn extract_hits(
     searcher: &tantivy::Searcher,
     top_hits: &[(f32, tantivy::DocAddress)],
@@ -812,21 +831,9 @@ fn extract_hits(
         let doc: tantivy::TantivyDocument = searcher
             .doc(*doc_addr)
             .map_err(|e| SearchError::Internal(e.to_string()))?;
-        let path = doc
-            .get_first(f_path)
-            .and_then(|v| tantivy::schema::Value::as_str(&v))
-            .unwrap_or("")
-            .to_string();
-        let heading = doc
-            .get_first(f_heading)
-            .and_then(|v| tantivy::schema::Value::as_str(&v))
-            .unwrap_or("")
-            .to_string();
-        let body = doc
-            .get_first(f_body)
-            .and_then(|v| tantivy::schema::Value::as_str(&v))
-            .unwrap_or("")
-            .to_string();
+        let path = doc_str_field(&doc, f_path);
+        let heading = doc_str_field(&doc, f_heading);
+        let body = doc_str_field(&doc, f_body);
         let category = category_for_path(&path);
 
         hits.push(SearchHit {
@@ -842,6 +849,62 @@ fn extract_hits(
         });
     }
     Ok(hits)
+}
+
+/// Normalize a raw user query: keep alphanumerics / `_` / `.` / whitespace, collapse spaces.
+fn sanitize_query(raw: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' || c == '.' || c.is_whitespace() {
+                c
+            } else {
+                ' '
+            }
+        })
+        .collect();
+    cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn build_query_signals(
+    max_bm25: f32,
+    hit_count: usize,
+    query_tokens: Vec<String>,
+    content_tokens: Vec<String>,
+    matched_content_tokens: Vec<String>,
+    token_coverage: f32,
+    on_topic: bool,
+    docs_empty: bool,
+) -> QuerySignals {
+    QuerySignals {
+        max_bm25,
+        hit_count,
+        query_tokens,
+        content_tokens,
+        matched_content_tokens,
+        token_coverage,
+        on_topic,
+        docs_empty,
+    }
+}
+
+fn order_categories(
+    by_cat: std::collections::BTreeMap<String, Vec<SearchHit>>,
+) -> Vec<CategoryHits> {
+    let mut categories: Vec<CategoryHits> = by_cat
+        .into_iter()
+        .map(|(category, hits)| CategoryHits { category, hits })
+        .collect();
+    categories.sort_by(|a, b| {
+        category_bucket_priority(&a.category)
+            .cmp(&category_bucket_priority(&b.category))
+            .then_with(|| {
+                let sa = a.hits.first().map_or(0.0, |h| h.score);
+                let sb = b.hits.first().map_or(0.0, |h| h.score);
+                sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+    categories
 }
 
 /// Run a BM25 query and return hits grouped by top-level docs category.
@@ -863,17 +926,7 @@ pub fn query(cache_dir: &Path, query_str: &str, top_k: usize) -> Result<QueryOut
     let f_heading = schema.get_field("heading").unwrap();
     let f_body = schema.get_field("body").unwrap();
 
-    let cleaned: String = query_str
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '_' || c == '.' || c.is_whitespace() {
-                c
-            } else {
-                ' '
-            }
-        })
-        .collect();
-    let cleaned = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    let cleaned = sanitize_query(query_str);
     let tokens = query_tokens(&cleaned);
     let content = content_tokens(&tokens);
 
@@ -903,9 +956,7 @@ pub fn query(cache_dir: &Path, query_str: &str, top_k: usize) -> Result<QueryOut
     let token_coverage = if content.is_empty() {
         1.0
     } else {
-        let m = matched.len().min(u32::MAX as usize) as f32;
-        let c = content.len().min(u32::MAX as usize) as f32;
-        m / c
+        matched.len() as f32 / content.len() as f32
     };
     let on_topic = if content.is_empty() {
         !scored.is_empty()
@@ -917,64 +968,51 @@ pub fn query(cache_dir: &Path, query_str: &str, top_k: usize) -> Result<QueryOut
 
     if scored.is_empty() && searcher.num_docs() == 0 {
         return Ok(QueryOutput {
-            signals: QuerySignals {
+            signals: build_query_signals(
                 max_bm25,
-                hit_count: 0,
-                query_tokens: tokens,
-                content_tokens: content,
-                matched_content_tokens: Vec::new(),
-                token_coverage: 0.0,
-                on_topic: false,
-                docs_empty: true,
-            },
+                0,
+                tokens,
+                content,
+                Vec::new(),
+                0.0,
+                false,
+                true,
+            ),
             categories: Vec::new(),
         });
     }
 
     if !on_topic {
         return Ok(QueryOutput {
-            signals: QuerySignals {
+            signals: build_query_signals(
                 max_bm25,
-                hit_count: 0,
-                query_tokens: tokens,
-                content_tokens: content,
-                matched_content_tokens: matched,
+                0,
+                tokens,
+                content,
+                matched,
                 token_coverage,
-                on_topic: false,
-                docs_empty: false,
-            },
+                false,
+                false,
+            ),
             categories: Vec::new(),
         });
     }
 
     let diversified = diversify_hits(&scored);
-    let by_cat = bucket_into_categories(&diversified, per_cat);
-    let mut categories: Vec<CategoryHits> = by_cat
-        .into_iter()
-        .map(|(category, hits)| CategoryHits { category, hits })
-        .collect();
-    categories.sort_by(|a, b| {
-        category_bucket_priority(&a.category)
-            .cmp(&category_bucket_priority(&b.category))
-            .then_with(|| {
-                let sa = a.hits.first().map_or(0.0, |h| h.score);
-                let sb = b.hits.first().map_or(0.0, |h| h.score);
-                sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
-            })
-    });
+    let categories = order_categories(bucket_into_categories(&diversified, per_cat));
     let hit_count: usize = categories.iter().map(|c| c.hits.len()).sum();
 
     Ok(QueryOutput {
-        signals: QuerySignals {
+        signals: build_query_signals(
             max_bm25,
             hit_count,
-            query_tokens: tokens,
-            content_tokens: content,
-            matched_content_tokens: matched,
+            tokens,
+            content,
+            matched,
             token_coverage,
-            on_topic: true,
-            docs_empty: false,
-        },
+            true,
+            false,
+        ),
         categories,
     })
 }
