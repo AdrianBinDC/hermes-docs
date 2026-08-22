@@ -175,7 +175,9 @@ _No hits._
           "heading": "<heading>",
           "url": "https://hermes-agent.nousresearch.com/docs/<url-path>",
           "score": 12.34,
-          "body": "<chunk text>"
+          "body": "<chunk text>",
+          "body_bytes": 1234,
+          "oversized": false
         }
       ]
     }
@@ -186,6 +188,14 @@ _No hits._
 `signals` are facts about the retrieval (BM25 + token overlap). `on_topic` is
 `false` when the query has content tokens that never appear in any hit; in that
 case `categories` is an empty array even if BM25 matched brand terms alone.
+
+Each hit includes `body_bytes` (byte length of `body`) and `oversized`
+(`true` when `body_bytes` exceeds 4096). The flag is a hint, not a truncation:
+the full body is still returned. When a consumer (e.g. an LLM agent) sees
+`oversized: true` on a hit, it should note in its reply that the section is
+large, prefer quoting only the relevant part, point the user to `url` for the
+full text, and suggest narrowing the query (more specific terms) or lowering
+`-k` if responses are consistently oversized.
 
 ---
 

@@ -109,7 +109,9 @@ Rules:
           "heading": "...",
           "url": "...",
           "score": 0.0,
-          "body": "..."
+          "body": "...",
+          "body_bytes": 1234,
+          "oversized": false
         }
       ]
     }
@@ -119,6 +121,18 @@ Rules:
 
 `score` is raw BM25. Categories are top-level docs folders (`user-guide`,
 `guides`, `reference`, …).
+
+`body_bytes` is the byte length of `body`. `oversized` is `true` when a chunk
+exceeds 4096 bytes. The full text is returned untruncated, but the flag tells
+you the section is large. When you see `oversized: true` on a hit:
+
+- Do not reproduce the whole chunk verbatim — quote only the parts relevant
+  to the user's question.
+- Mention that the retrieved section is large and point the user to `url` for
+  the full text.
+- If the response still does not cover the question, tell the user the
+  response may be incomplete due to the large section and suggest a more
+  specific query or a lower `-k` to get smaller, more focused chunks.
 
 ## Exit codes
 

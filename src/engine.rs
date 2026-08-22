@@ -21,6 +21,10 @@ pub struct SearchHit {
     /// Raw BM25 score from Tantivy (higher = stronger lexical match).
     pub score: f32,
     pub body: String,
+    /// Length of `body` in bytes.
+    pub body_bytes: usize,
+    /// True when `body_bytes` exceeds `OVERSIZED_CHUNK_BYTES`.
+    pub oversized: bool,
 }
 
 #[derive(serde::Serialize, Clone, Debug)]
@@ -52,6 +56,9 @@ pub struct QueryOutput {
 }
 
 const BASE_URL: &str = "https://hermes-agent.nousresearch.com/docs";
+
+/// Chunks whose body exceeds this are flagged `oversized` in JSON output.
+const OVERSIZED_CHUNK_BYTES: usize = 4096;
 
 /// Strip from BM25 query — question glue words only.
 fn is_search_noise_token(t: &str) -> bool {
@@ -835,6 +842,8 @@ pub fn query(
             path,
             heading,
             score,
+            body_bytes: body.len(),
+            oversized: body.len() > OVERSIZED_CHUNK_BYTES,
             body,
         });
     }
@@ -912,54 +921,21 @@ mod tests {
     use tempfile::TempDir;
 
     fn setup_fixtures(dir: &Path) {
-        fs::create_dir_all(dir.join("config")).unwrap();
-        fs::write(
-            dir.join("config/configuration.md"),
-            r#"# Configuration
-
-## Configuration Files
-
-Hermes uses a configuration file at ~/.hermes/config.yaml to store settings.
-The configuration file controls model selection, API keys, and behavior.
-
-## Environment Variables
-
-You can override configuration via environment variables like HERMES_MODEL
-and HERMES_API_KEY.
-"#,
-        )
-        .unwrap();
-
-        fs::create_dir_all(dir.join("tools")).unwrap();
-        fs::write(
-            dir.join("tools/toolsets.md"),
-            r#"# Toolsets
-
-## Available Toolsets
-
-Hermes provides several toolsets including file operations, web search,
-and code execution.
-
-### Web Search Toolset
-
-The web search toolset allows the agent to search the internet and retrieve
-results. Configure it via the toolsets section in config.
-"#,
-        )
-        .unwrap();
-
-        fs::create_dir_all(dir.join("reference")).unwrap();
-        fs::write(
-            dir.join("reference/env.md"),
-            r#"# Environment
-
-## Environment Variables
-
-The HERMES_HOME environment variable sets the base directory.
-HERMES_DOCS_PATH can override where docs are read from.
-"#,
-        )
-        .unwrap();
+        let src = Path::new("tests/fixtures/docs");
+        fn copy_tree(src_dir: &Path, dst_dir: &Path) {
+            for entry in fs::read_dir(src_dir).unwrap() {
+                let entry = entry.unwrap();
+                let target = dst_dir.join(entry.file_name());
+                if entry.file_type().unwrap().is_dir() {
+                    fs::create_dir_all(&target).unwrap();
+                    copy_tree(entry.path().as_ref(), &target);
+                } else {
+                    fs::copy(entry.path(), &target).unwrap();
+                }
+            }
+        }
+        fs::create_dir_all(dir).unwrap();
+        copy_tree(src, dir);
     }
 
     #[test]
@@ -1375,6 +1351,47 @@ SDK.components.Button is the default export for dashboard plugins.
     fn test_escape_user_query() {
         assert_eq!(escape_user_query("config.yaml: providers"), r"config.yaml\: providers");
         assert_eq!(escape_user_query("foo (bar)"), r"foo \(bar\)");
+    }
+
+    #[test]
+    fn test_oversized_chunk_flag() {
+        let tmp = TempDir::new().unwrap();
+        let docs = tmp.path().join("docs");
+        fs::create_dir_all(docs.join("reference")).unwrap();
+        let big_body = "x".repeat(5000);
+        fs::write(
+            docs.join("reference/long.md"),
+            format!("# Long\n\n## Huge section\n\n{}", big_body),
+        )
+        .unwrap();
+        fs::create_dir_all(docs.join("config")).unwrap();
+        fs::write(
+            docs.join("config/small.md"),
+            "# Small\n\n## Short section\n\nTiny body text.\n",
+        )
+        .unwrap();
+
+        let cache = tmp.path().join("cache");
+        reindex(&docs, &cache).unwrap();
+
+        let out = query(&cache, "huge section", 5).unwrap();
+        let hits = flat_hits(&out);
+        assert!(hits.iter().any(|h| h.path.contains("long.md")), "expected long.md in hits");
+        let big = hits
+            .iter()
+            .find(|h| h.path.contains("long.md"))
+            .expect("long.md hit missing");
+        assert_eq!(big.body_bytes, 5000);
+        assert!(big.oversized, "expected oversized flag for >4096 byte chunk");
+
+        let out = query(&cache, "short section", 5).unwrap();
+        let hits_small = flat_hits(&out);
+        let small = hits_small
+            .iter()
+            .find(|h| h.path.contains("small.md"))
+            .expect("small.md hit missing");
+        assert!(!small.oversized, "small chunk must not be flagged oversized");
+        assert_eq!(small.body_bytes, small.body.len());
     }
 
     #[test]
