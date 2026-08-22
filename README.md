@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <strong>Unofficial companion for <a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a></strong><br>
+  <strong>Documentation companion for <a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a></strong><br>
   <em>Not affiliated with or endorsed by <a href="https://nousresearch.com">Nous Research</a>.</em><br>
   Banner artwork © Nous Research — shown here only to identify the Hermes Agent ecosystem this tool is built for.
 </p>
@@ -14,7 +14,7 @@
 
 <p align="center">
   <a href="https://hermes-agent.nousresearch.com/docs"><img src="https://img.shields.io/badge/Hermes%20Docs-hermes--agent.nousresearch.com-FFD700?style=for-the-badge" alt="Hermes documentation"></a>
-  <a href="https://github.com/NousResearch/hermes-agent"><img src="https://img.shields.io/badge/Built%20for-Hermes%20Agent-blueviolet?style=for-the-badge" alt="Built for Hermes Agent"></a>
+  <a href="https://github.com/NousResearch/hermes-agent"><img src="https://img.shields.io/badge/Docs%20companion%20for-Hermes%20Agent-blueviolet?style=for-the-badge" alt="Documentation companion for Hermes Agent"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
 </p>
 
@@ -104,4 +104,4 @@ ln -s $(pwd)/skills/hermes-docs ~/.hermes/skills/hermes-docs
 
 This project is [MIT](LICENSE) licensed.
 
-Hermes Agent, its documentation site, and the banner above are property of [Nous Research](https://nousresearch.com) / [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent). This repository is an independent companion tool for use with Hermes Agent.
+Hermes Agent, its documentation site, and the banner above are property of [Nous Research](https://nousresearch.com) / [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent). This repository is an independent documentation companion for use with Hermes Agent.
