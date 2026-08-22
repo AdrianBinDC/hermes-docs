@@ -9,6 +9,10 @@ Install the skill into Hermes:
 cp -r skills/hermes-docs ~/.hermes/skills/
 ```
 
-The first query may build or fetch the binary; subsequent queries are instant.
+The first query uses a cached binary when present. Without one, the wrapper builds
+from source if `cargo` and this repo are available. To download a release instead,
+set `HERMES_DOCS_RELEASE` to the GitHub release asset base URL (for example
+`https://github.com/AdrianBinDC/hermes-docs/releases/download/v0.1.0`).
+Subsequent queries are instant once the binary is in cache.
 
 No Docker required.

@@ -204,8 +204,12 @@ The `hermes-docs` skill consumes `--json` output and answers from retrieved
 chunks only. When chunks contain technical literals (config keys, env var names,
 CLI commands/flags, paths, YAML/JSON examples), the agent must quote them
 verbatim from `body` text — no renaming or paraphrase. If a literal is missing
-from retrieval, the agent must not invent it. When `signals.on_topic` is false
-or `categories` is empty, the agent must give a one-sentence plain refusal only
+from retrieval, the agent must not invent it. When hits disagree on the same
+install/config step (different files, keys, nesting, or targets), the agent
+must not merge or invent a combined answer — it must list the conflicting
+options with `path`/`url` and one-line differences, ask which source to follow,
+and stop until the user chooses. When `signals.on_topic` is false or
+`categories` is empty, the agent must give a one-sentence plain refusal only
 (e.g. "The Hermes docs don't cover this.") and stop — no guesses, humor, or
 commentary.
 

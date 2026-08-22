@@ -28,19 +28,39 @@ sh scripts/hermes-docs --json "<user's question>"
 ```
 
 The wrapper is a **shell script** (not Node). Do not run it with `node`.
-Do not pass `-8` — that is a common typo; the wrapper maps `-8` → `-k 8`.
-When `--json` is set, the wrapper injects `-k 8` automatically if you omit
-`-k`. Do not add `-k` unless you intentionally want a different hit count.
+Do not pass `-8` — that is a common typo; the wrapper maps `-8` → `-k 3`.
+When `--json` is set, the wrapper injects `-k 3` automatically if you omit
+`-k` (per category). Do not add `-k` unless you intentionally want more hits.
 
 Rules:
 
 1. **One invocation only.** Do not rephrase and re-run.
 2. **Answer from the JSON only.** Use `signals` and `categories` as data.
    Cite `path` + `url` for every claim. Do not invent config keys.
-   When `user-guide/messaging/*` and `guides/*` both appear for the same
-   topic, lead with the user-guide messaging page; treat `guides/` hits as
-   supplementary examples only.
-3. **Quote technical literals exactly** as they appear in chunk `body` text.
+3. **Conflicting setup snippets — ask, do not merge (hard stop).** When hits
+   disagree on the same install/config step (different files, keys, nesting,
+   or file targets — e.g. `~/.hermes/.env` vs `config.yaml` `platforms.telegram`),
+   **do not** pick one, stitch them, or invent a combined answer. Reply with a
+   short clarification only:
+
+   - Name the conflict in one sentence.
+   - List each option with `path` + `url` and a one-line difference (quote the
+     conflicting literals from `body` exactly).
+   - Ask which source to follow.
+   - **STOP.** Wait for the user. After they choose, answer from that source
+     only (still from the JSON you already have; do not re-run unless they
+     ask a new question).
+
+   Prefer this over a confident wrong answer. The user is in the loop.
+
+   Example shape (Telegram often triggers this):
+
+   > The docs show two Telegram setup patterns. Which should I follow?
+   > 1. `user-guide/messaging/telegram.md` — `hermes gateway setup` or
+   >    `TELEGRAM_BOT_TOKEN` / `TELEGRAM_ALLOWED_USERS` in `~/.hermes/.env`
+   > 2. `guides/local-ollama-setup.md` — `platforms.telegram` token in
+   >    `config.yaml`
+4. **Quote technical literals exactly** as they appear in chunk `body` text.
    Do not rename, abbreviate, or paraphrase:
    - `config.yaml` keys, nesting, and example values
    - `.env` variable names (e.g. `TELEGRAM_BOT_TOKEN`, not "the telegram token")
@@ -52,13 +72,13 @@ Rules:
 
    Example — chunk says `TELEGRAM_ALLOWED_USERS=123456789`. Your answer uses
    that exact name and shape, not "allowed user IDs in config".
-4. **Off-topic refusal (hard stop).** When `signals.on_topic` is false **or**
+5. **Off-topic refusal (hard stop).** When `signals.on_topic` is false **or**
    `categories` is empty, reply with **one sentence only** — e.g. "The Hermes
    docs don't cover this." — then **STOP**. No humor, jokes, guesses, numbers,
    "vibes", meta commentary about the question, or explaining why it is
    nonsensical. Do not fabricate any answer, including playful ones. Do not
    search elsewhere.
-5. **Never fall back** to `rg`, `grep`, `search_files`, `glob`, `read_file`, or
+6. **Never fall back** to `rg`, `grep`, `search_files`, `glob`, `read_file`, or
    opening docs under `~/.hermes/hermes-agent/website/docs` — even when JSON
    chunks look incomplete. Answer from JSON only; say what is missing.
    Do not read `~/.hermes/config.yaml` or fetch the docs website.
