@@ -1,6 +1,28 @@
+<p align="center">
+  <a href="https://github.com/NousResearch/hermes-agent">
+    <img src="https://raw.githubusercontent.com/NousResearch/hermes-agent/main/assets/banner.png" alt="Hermes Agent banner (from NousResearch/hermes-agent)" width="100%">
+  </a>
+</p>
+
+<p align="center">
+  <strong>Unofficial documentation companion for <a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a></strong><br>
+  <em>Not affiliated with or endorsed by <a href="https://nousresearch.com">Nous Research</a>.</em><br>
+  Banner artwork © Nous Research — shown here only to identify the Hermes Agent ecosystem this tool is built for.
+</p>
+
 # hermes-docs
 
-BM25 docs-search CLI (`hermes-docs-search`) plus a Hermes skill that retrieves grounded markdown chunks from the local Hermes Agent docs tree.
+<p align="center">
+  <a href="https://github.com/AdrianBinDC/hermes-docs/actions/workflows/ci.yml"><img src="https://github.com/AdrianBinDC/hermes-docs/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="#dev--testing"><img src="https://img.shields.io/badge/coverage-91%25-brightgreen" alt="Line coverage 91%"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+</p>
+
+**Grounded answers from your local Hermes docs — not web guesswork.**
+
+The official [Hermes Agent documentation](https://hermes-agent.nousresearch.com/docs) lives on the web — ask inside Hermes and it often wanders. **hermes-docs** is an unofficial documentation skill plus local BM25 CLI (`hermes-docs-search`) that retrieves tightly scoped, grounded markdown chunks from your local Hermes Agent docs tree, with citations back to the published pages.
+
+> **Scope:** Unofficial community tool for use with [Hermes Agent](https://github.com/NousResearch/hermes-agent). It indexes the docs that ship with Hermes; it is not a substitute for Hermes itself, and it is not an official Nous Research project.
 
 ## Prerequisites
 
@@ -62,7 +84,10 @@ The skill wrapper (`skills/hermes-docs/scripts/hermes-docs`) injects `-k 3` when
 
 ```bash
 cargo test
+cargo llvm-cov --summary-only --ignore-filename-regex 'main\.rs'
 ```
+
+Line coverage on `src/engine.rs` is currently **~91%** (CLI `main.rs` excluded). CI enforces a floor so it does not regress quietly.
 
 Development tip: symlink the local skill into your Hermes skills folder so edits are live without re-copying:
 
@@ -77,3 +102,9 @@ ln -s $(pwd)/skills/hermes-docs ~/.hermes/skills/hermes-docs
 - [CONTRACT.md](CONTRACT.md) — source of truth for CLI flags, output formats, exit codes, docs-root resolution, and skill behavior
 - [docs/engine.md](docs/engine.md) — search engine query/index pipelines (Mermaid); also in [`src/engine.rs`](src/engine.rs) module docs
 - [skills/hermes-docs/SKILL.md](skills/hermes-docs/SKILL.md) — agent behavior rules for the `hermes-docs` skill
+
+## License
+
+This project is [MIT](LICENSE) licensed.
+
+Hermes Agent, its documentation site, and the banner above are property of [Nous Research](https://nousresearch.com) / [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent). This repository is an unofficial documentation companion / skill for use with Hermes Agent.
