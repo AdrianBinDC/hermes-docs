@@ -75,9 +75,11 @@ Rules:
 5. **Off-topic refusal (hard stop).** When `signals.on_topic` is false **or**
    `categories` is empty, reply with **one sentence only** — e.g. "The Hermes
    docs don't cover this." — then **STOP**. No humor, jokes, guesses, numbers,
-   "vibes", meta commentary about the question, or explaining why it is
-   nonsensical. Do not fabricate any answer, including playful ones. Do not
-   search elsewhere.
+    "vibes", meta commentary about the question, or explaining why it is
+    nonsensical. Do not fabricate any answer, including playful ones. Do not
+    search elsewhere. When `signals.docs_empty` is true the docs tree resolved
+    but contained no indexable content — the refusal is because there is no
+    material, not because the question is off-topic.
 6. **Never fall back** to `rg`, `grep`, `search_files`, `glob`, `read_file`, or
    opening docs under `~/.hermes/hermes-agent/website/docs` — even when JSON
    chunks look incomplete. Answer from JSON only; say what is missing.
@@ -96,7 +98,8 @@ Rules:
     "content_tokens": [],
     "matched_content_tokens": [],
     "token_coverage": 0.0,
-    "on_topic": false
+    "on_topic": false,
+    "docs_empty": false
   },
   "categories": [
     {

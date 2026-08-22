@@ -162,7 +162,8 @@ _No hits._
     "content_tokens": ["telegram"],
     "matched_content_tokens": ["telegram"],
     "token_coverage": 1.0,
-    "on_topic": true
+    "on_topic": true,
+    "docs_empty": false
   },
   "categories": [
     {

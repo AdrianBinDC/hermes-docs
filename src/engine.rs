@@ -43,6 +43,9 @@ pub struct QuerySignals {
     pub token_coverage: f32,
     /// False when content tokens exist but not all appear in retrieved hits.
     pub on_topic: bool,
+    /// True when the index is empty (docs root resolved but no chunks were
+    /// indexed). Distinguishes "no docs content" from "off-topic query".
+    pub docs_empty: bool,
 }
 
 #[derive(serde::Serialize, Clone, Debug)]
@@ -859,6 +862,22 @@ pub fn query(
 
     let max_bm25 = scored.first().map(|h| h.score).unwrap_or(0.0);
 
+    if scored.is_empty() && searcher.num_docs() == 0 {
+        return Ok(QueryOutput {
+            signals: QuerySignals {
+                max_bm25,
+                hit_count: 0,
+                query_tokens: tokens,
+                content_tokens: content,
+                matched_content_tokens: Vec::new(),
+                token_coverage: 0.0,
+                on_topic: false,
+                docs_empty: true,
+            },
+            categories: Vec::new(),
+        });
+    }
+
     if !on_topic {
         return Ok(QueryOutput {
             signals: QuerySignals {
@@ -869,6 +888,7 @@ pub fn query(
                 matched_content_tokens: matched,
                 token_coverage,
                 on_topic: false,
+                docs_empty: false,
             },
             categories: Vec::new(),
         });
@@ -900,6 +920,7 @@ pub fn query(
             matched_content_tokens: matched,
             token_coverage,
             on_topic: true,
+            docs_empty: false,
         },
         categories,
     })
@@ -1047,6 +1068,35 @@ More text."#;
 
         let out = query(&cache, "zzzzzqqqqqqxxx", 5).unwrap();
         assert!(flat_hits(&out).is_empty());
+        assert!(!out.signals.on_topic);
+    }
+
+    #[test]
+    fn test_empty_docs_tree_sets_docs_empty() {
+        let tmp = TempDir::new().unwrap();
+        let docs = tmp.path().join("docs");
+        fs::create_dir_all(&docs).unwrap();
+        let cache = tmp.path().join("cache");
+        reindex(&docs, &cache).unwrap();
+
+        let out = query(&cache, "configuration", 5).unwrap();
+        assert!(out.signals.docs_empty, "expected docs_empty=true; signals={:?}", out.signals);
+        assert!(!out.signals.on_topic);
+        assert_eq!(out.signals.hit_count, 0);
+        assert!(out.categories.is_empty());
+    }
+
+    #[test]
+    fn test_non_empty_docs_tree_not_flagged_docs_empty() {
+        let tmp = TempDir::new().unwrap();
+        let docs = tmp.path().join("docs");
+        setup_fixtures(&docs);
+        let cache = tmp.path().join("cache");
+        reindex(&docs, &cache).unwrap();
+
+        // Even an off-topic query on a populated tree must not set docs_empty.
+        let out = query(&cache, "zzzzzqqqqqqxxx", 5).unwrap();
+        assert!(!out.signals.docs_empty, "populated tree must not set docs_empty; signals={:?}", out.signals);
         assert!(!out.signals.on_topic);
     }
 

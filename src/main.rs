@@ -95,8 +95,9 @@ fn print_markdown(query: &str, out: &QueryOutput) {
     println!("# Hermes docs search: {query}");
     println!();
     println!(
-        "signals: on_topic={} max_bm25={:.4} token_coverage={:.2} content_tokens={:?} matched={:?}",
+        "signals: on_topic={} docs_empty={} max_bm25={:.4} token_coverage={:.2} content_tokens={:?} matched={:?}",
         out.signals.on_topic,
+        out.signals.docs_empty,
         out.signals.max_bm25,
         out.signals.token_coverage,
         out.signals.content_tokens,
