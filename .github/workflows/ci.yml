@@ -15,7 +15,7 @@ jobs:
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: rustfmt, clippy, llvm-tools-preview
 
       - name: Check formatting
         run: cargo fmt --check
@@ -25,3 +25,12 @@ jobs:
 
       - name: Run tests
         run: cargo test
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Enforce line coverage floor
+        run: >
+          cargo llvm-cov --fail-under-lines 85
+          --ignore-filename-regex 'main\.rs'
+          --summary-only
