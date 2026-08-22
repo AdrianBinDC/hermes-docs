@@ -21,6 +21,13 @@ The binary is `hermes-docs-search`.
 cp -r skills/hermes-docs ~/.hermes/skills/
 ```
 
+Hermes also supports profile-scoped homes, so you can install into a specific
+profile instead:
+
+```bash
+cp -r skills/hermes-docs ~/.hermes/profiles/<profile-name>/skills/
+```
+
 The first query uses a cached binary when present. Without one, the wrapper builds from source if `cargo` and this repo are available. To download a release instead, set `HERMES_DOCS_RELEASE` to the GitHub release asset base URL (for example `https://github.com/AdrianBinDC/hermes-docs/releases/download/v0.1.0`). Subsequent queries are instant once the binary is in cache.
 
 No Docker required.
@@ -49,12 +56,23 @@ Flags:
 - `--docs-path <PATH>` — explicit docs root override
 - `--cache-dir <PATH>` — state/index location (default `$XDG_CACHE_HOME/hermes-docs-search` or `~/.cache/hermes-docs-search`)
 
+The skill wrapper (`skills/hermes-docs/scripts/hermes-docs`) injects `-k 3` when called with `--json` unless `-k`/`--top-k` is already provided, and maps the common `-8` typo to `-k 3`. When retrieved doc chunks disagree on the same setup step, the skill asks which source to follow instead of merging answers (see [SKILL.md](skills/hermes-docs/SKILL.md) for the full rule).
+
 ## Dev / testing
 
 ```bash
 cargo test
 ```
 
-## Contract
+Development tip: symlink the local skill into your Hermes skills folder so edits are live without re-copying:
 
-[CONTRACT.md](CONTRACT.md) is the full spec for CLI flags, output templates, JSON shape, exit codes, docs-root resolution, and skill behavior.
+```bash
+ln -s $(pwd)/skills/hermes-docs ~/.hermes/skills/hermes-docs
+```
+
+(or the profile path `~/.hermes/profiles/<name>/skills/hermes-docs`).
+
+## Documentation
+
+- [CONTRACT.md](CONTRACT.md) — source of truth for CLI flags, output formats, exit codes, docs-root resolution, and skill behavior
+- [skills/hermes-docs/SKILL.md](skills/hermes-docs/SKILL.md) — agent behavior rules for the `hermes-docs` skill
