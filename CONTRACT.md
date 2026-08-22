@@ -175,7 +175,9 @@ _No hits._
           "heading": "<heading>",
           "url": "https://hermes-agent.nousresearch.com/docs/<url-path>",
           "score": 12.34,
-          "body": "<chunk text>"
+          "body": "<chunk text>",
+          "body_bytes": 1234,
+          "oversized": false
         }
       ]
     }
@@ -186,6 +188,11 @@ _No hits._
 `signals` are facts about the retrieval (BM25 + token overlap). `on_topic` is
 `false` when the query has content tokens that never appear in any hit; in that
 case `categories` is an empty array even if BM25 matched brand terms alone.
+
+Each hit includes `body_bytes` (byte length of `body`) and `oversized`
+(`true` when `body_bytes` exceeds 4096). The `oversized` flag signals to the
+consumer that the chunk may be large enough to crowd out other chunks or hit
+context limits, even though no truncation is performed.
 
 ---
 

@@ -109,7 +109,9 @@ Rules:
           "heading": "...",
           "url": "...",
           "score": 0.0,
-          "body": "..."
+          "body": "...",
+          "body_bytes": 1234,
+          "oversized": false
         }
       ]
     }
@@ -119,6 +121,12 @@ Rules:
 
 `score` is raw BM25. Categories are top-level docs folders (`user-guide`,
 `guides`, `reference`, …).
+
+`body_bytes` is the byte length of `body`. `oversized` is `true` when a chunk
+exceeds 4096 bytes — the full text is returned untruncated, but the chunk is
+large enough that it may crowd out other chunks in the response. When you see
+`oversized: true`, prefer quoting the most relevant part and say the full
+section is at `url` rather than reproducing the whole thing verbatim.
 
 ## Exit codes
 
