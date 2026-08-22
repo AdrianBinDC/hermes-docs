@@ -28,9 +28,9 @@ sh scripts/hermes-docs --json "<user's question>"
 ```
 
 The wrapper is a **shell script** (not Node). Do not run it with `node`.
-Do not pass `-8` — that is a common typo; the wrapper maps `-8` → `-k 8`.
-When `--json` is set, the wrapper injects `-k 8` automatically if you omit
-`-k`. Do not add `-k` unless you intentionally want a different hit count.
+Do not pass `-8` — that is a common typo; the wrapper maps `-8` → `-k 3`.
+When `--json` is set, the wrapper injects `-k 3` automatically if you omit
+`-k` (per category). Do not add `-k` unless you intentionally want more hits.
 
 Rules:
 
