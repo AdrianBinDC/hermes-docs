@@ -857,7 +857,6 @@ fn extract_hits(
 ///
 /// Scores are raw BM25. Callers (or an LLM) interpret `signals` + categories;
 /// this function does not pick a "primary" document.
-#[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
 pub fn query(cache_dir: &Path, query_str: &str, top_k: usize) -> Result<QueryOutput, SearchError> {
     let mmap_dir = MmapDirectory::open(index_path(cache_dir))
         .map_err(|e| SearchError::Internal(format!("failed to open index dir: {e}")))?;
@@ -990,7 +989,6 @@ pub fn query(cache_dir: &Path, query_str: &str, top_k: usize) -> Result<QueryOut
 }
 
 #[cfg(test)]
-#[allow(clippy::needless_raw_string_hashes)]
 mod tests {
     use super::*;
     use std::fs;

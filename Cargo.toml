@@ -27,3 +27,12 @@ tempfile = "3"
 [profile.release]
 lto = true
 strip = true
+
+# Clippy policy (see AGENTS.md "Lint / diff hygiene").
+# CI runs `cargo clippy --all-targets -- -D warnings` so these levels are authoritative.
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Pedantic noise with no realistic failure mode in this crate:
+too_many_lines = "allow"
+cast_precision_loss = "allow"
+needless_raw_string_hashes = "allow"

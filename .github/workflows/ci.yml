@@ -21,7 +21,7 @@ jobs:
         run: cargo fmt --check
 
       - name: Lint
-        run: cargo clippy --all-targets -- -D warnings -W clippy::pedantic
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Run tests
         run: cargo test
