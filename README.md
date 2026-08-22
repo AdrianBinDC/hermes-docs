@@ -13,14 +13,13 @@
 # hermes-docs
 
 <p align="center">
-  <a href="https://hermes-agent.nousresearch.com/docs"><img src="https://img.shields.io/badge/Hermes%20Docs-hermes--agent.nousresearch.com-FFD700?style=for-the-badge" alt="Hermes documentation"></a>
-  <a href="https://github.com/NousResearch/hermes-agent"><img src="https://img.shields.io/badge/Docs%20companion%20for-Hermes%20Agent-blueviolet?style=for-the-badge" alt="Documentation companion for Hermes Agent"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
+  <a href="https://github.com/AdrianBinDC/hermes-docs/actions/workflows/ci.yml"><img src="https://github.com/AdrianBinDC/hermes-docs/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
 </p>
 
-**Hermes answers that stay on the docs.**
+**Grounded answers from your local Hermes docs — not web guesswork.**
 
-The official [Hermes Agent documentation](https://hermes-agent.nousresearch.com/docs) lives on the web — ask inside Hermes and it often wanders. **hermes-docs** is a local BM25 search CLI (`hermes-docs-search`) plus a Hermes skill that retrieves tightly scoped, grounded markdown chunks from your local Hermes Agent docs tree, with citations back to the published pages.
+The official [Hermes Agent documentation](https://hermes-agent.nousresearch.com/docs) lives on the web — ask inside Hermes and it often wanders. **hermes-docs** is a community BM25 search CLI (`hermes-docs-search`) plus a Hermes skill that retrieves tightly scoped, grounded markdown chunks from your local Hermes Agent docs tree, with citations back to the published pages.
 
 > **Scope:** This project assumes you already use [Hermes Agent](https://github.com/NousResearch/hermes-agent). It indexes the docs that ship with Hermes; it is not a substitute for Hermes itself.
 
