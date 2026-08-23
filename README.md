@@ -99,6 +99,7 @@ ln -s $(pwd)/skills/hermes-docs ~/.hermes/skills/hermes-docs
 
 ## Documentation
 
+- [CONTRIBUTING.md](CONTRIBUTING.md) — how to report issues and send PRs
 - [CONTRACT.md](CONTRACT.md) — source of truth for CLI flags, output formats, exit codes, docs-root resolution, and skill behavior
 - [docs/engine.md](docs/engine.md) — search engine query/index pipelines (Mermaid); also in [`src/engine.rs`](src/engine.rs) module docs
 - [skills/hermes-docs/SKILL.md](skills/hermes-docs/SKILL.md) — agent behavior rules for the `hermes-docs` skill
